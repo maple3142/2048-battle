@@ -1,4 +1,4 @@
-# Battle 2048
+# 2048 Battle
 
 ## Setup
 
