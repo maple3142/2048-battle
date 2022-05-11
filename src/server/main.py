@@ -1,8 +1,10 @@
 import asyncio
 import argparse
 from websockets.server import serve, WebSocketServerProtocol
+from websockets.exceptions import ConnectionClosed
 from shared_utils import receive_events, send_event, rand_num_str
-from typing import Dict, Set, Any
+from messages import *
+from typing import Dict, Set
 import logging
 import os
 
@@ -18,11 +20,11 @@ class Room:
         self.ws1 = ws1
         self.ws2 = ws2
 
-    async def try_send_all(self, type, data=None):
+    async def try_send_all(self, data):
         for ws in [self.ws1, self.ws2]:
             try:
-                await send_event(ws, type, data)
-            except:
+                await send_event(ws, data)
+            except ConnectionClosed as ex:
                 pass
 
     def match(self, ws: WebSocketServerProtocol) -> bool:
@@ -34,10 +36,10 @@ class Room:
         elif ws == self.ws2:
             return self.ws1
 
-    async def try_send_opponent(self, ws: WebSocketServerProtocol, type, data=None):
+    async def try_send_opponent(self, ws: WebSocketServerProtocol, data):
         opponent = self.get_opponent_of(ws)
         try:
-            await send_event(opponent, type, data)
+            await send_event(opponent, data)
         except:
             pass
 
@@ -55,34 +57,36 @@ class MainServer:
             if room.match(ws):
                 return room
 
-    async def handle_new_room(self, ws: WebSocketServerProtocol, data: Any):
+    async def handle_new_room(self, ws: WebSocketServerProtocol, data: NewRoomRequest):
         room_id = rand_num_str(8)
         self.pending_rooms[room_id] = ws
-        await send_event(ws, "new_room_id", {"room_id": room_id})
+        await send_event(ws, NewRoomResponse(room_id))
 
-    async def handle_connect(self, ws: WebSocketServerProtocol, data: Any):
-        room_id = data["room_id"]
-        if room_id in self.pending_rooms:
-            ws2 = self.pending_rooms.pop(room_id)
-            r = Room(room_id, ws, ws2)
+    async def handle_connect(self, ws: WebSocketServerProtocol, data: ConnectRequest):
+        if data.room_id in self.pending_rooms:
+            ws2 = self.pending_rooms.pop(data.room_id)
+            r = Room(data.room_id, ws, ws2)
             self.rooms.add(r)
-            await r.try_send_all("connected")
+            await r.try_send_all(ConnectedMessage())
             logging.info(f"new room created {r}")
         else:
-            await send_event(
-                ws, "error", {"message": f"Unable to join room {room_id}."}
-            )
+            await send_event(ws, ErrorMessage(f"Unable to join room {data.room_id}."))
 
-    async def handle_client_update(self, ws: WebSocketServerProtocol, data: Any):
+    async def handle_client_update(
+        self, ws: WebSocketServerProtocol, data: ClientUpdateMessage
+    ):
         r = self.find_matching_room(ws)
-        resp = {"score": data["score"]}
-        if data["new_block"] >= 64:
-            resp["penalty_block"] = data["new_block"] // 32
-        await r.try_send_opponent(ws, "opponent_update", resp)
+        if data.new_block >= 64:
+            resp = OpponentUpdateMessage(data.score, data.new_block // 32)
+        else:
+            resp = OpponentUpdateMessage(data.score)
+        await r.try_send_opponent(ws, resp)
 
-    async def handle_client_win(self, ws: WebSocketServerProtocol, data: Any):
+    async def handle_client_win(
+        self, ws: WebSocketServerProtocol, data: ClientWinMessage
+    ):
         r = self.find_matching_room(ws)
-        await r.try_send_opponent(ws, "opponent_win", {"score": data["score"]})
+        await r.try_send_opponent(ws, OpponentWinMessage(data.score))
 
     async def handle(self, ws: WebSocketServerProtocol):
         async for type, data in receive_events(ws):
@@ -92,7 +96,7 @@ class MainServer:
                 await handler(ws, data)
         logging.info(f"{ws} disconnected")
         if (r := self.find_matching_room(ws)) is not None:
-            await r.try_send_all("disconnected")
+            await r.try_send_all(DisconnectedMessage())
             logging.info(f"removing room {r}")
             self.rooms.remove(r)
 

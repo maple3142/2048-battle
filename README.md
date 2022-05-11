@@ -28,7 +28,7 @@ server api: 透過 socket 或是 websocket 連線，資料一律以 json 格式�
 		client_update(score, new_block): score 是目前分數，以及 client 端所合成的方塊資料 data
 		client_win(score): 傳送勝利時的分數
 	server -> client:
-        new_room_id(): new_room 的回應
+		new_room_id(): new_room 的回應
 		connected(): server 通知兩端已經連接上了
 		disconnected(): server 通知另一端已經離線了
 		opponent_update(score, penalty_block): server 傳送來自另一端的更新資訊，包括對手分數，和懲罰的方塊
