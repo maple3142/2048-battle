@@ -1,6 +1,6 @@
 import asyncio
 from websockets.client import connect, WebSocketClientProtocol
-from shared_utils import receive_events, send_event
+from shared_utils import receive_events, next_event, send_event
 import logging
 import os
 
@@ -8,7 +8,7 @@ LOGLEVEL = os.environ.get("LOGLEVEL", "INFO").upper()
 logging.basicConfig(level=LOGLEVEL)
 
 async def handle_ws1(ws: WebSocketClientProtocol):
-    type, data = await anext(receive_events(ws))
+    type, data = await next_event(ws)
     logging.info(('ws1', type, data))
     assert type == 'connected'
     await asyncio.sleep(1)
@@ -29,7 +29,7 @@ async def handle_ws1(ws: WebSocketClientProtocol):
         logging.info(('ws1', type, data))
 
 async def handle_ws2(ws: WebSocketClientProtocol):
-    type, data = await anext(receive_events(ws))
+    type, data = await next_event(ws)
     logging.info(('ws2', type, data))
     assert type == 'connected'
     await asyncio.sleep(3)
