@@ -9,7 +9,7 @@ logging.basicConfig(level=LOGLEVEL)
 
 async def hello():
     async with connect("ws://localhost:1357") as ws:
-        await send_event(ws, "new_room")
+        await send_event(ws, "connect", {'room_id': '23098614'})
         async for type, data in receive_events(ws):
             logging.info((type, data))
 
