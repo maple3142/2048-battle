@@ -10,6 +10,9 @@ import glfw
 import time
 import OpenGL.GL as gl
 import freetype
+import threading
+import queue
+import random
 
 ROOM_ID_LENGTH = 8;
 
@@ -55,6 +58,9 @@ UIID_Back       = 1;
 UIID_CreateRoom = 2;
 UIID_JoinRoom   = 3;
 UIID_Exit       = 4;
+
+TargetFPS = 60.0;
+TargetSecondPerFrame = 1.0 / TargetFPS;
 
 class v4:
     def __init__(self, R: float, G: float, B: float, A: float):
@@ -108,8 +114,6 @@ class input:
         if(self.IsPressed(Key_9)):  return '9';
         return None;
 
-Input = input();
-
 class loaded_glyph:
     def __init__(self, \
                  dX: float, dY: float, DimX: float, DimY: float, \
@@ -149,6 +153,49 @@ class render_group:
         self.CameraX = CameraX;
         self.CameraY = CameraY;
 
+class key_frame:
+    def __init__(self, X0: float, Y0: float, R0: float, X1: float, Y1: float, R1: float, t1: float, Value: int, LoopCount: int):
+        self.X0 = X0;
+        self.Y0 = Y0;
+        self.R0 = R0;
+        self.X1 = X1;
+        self.Y1 = Y1;
+        self.R1 = R1;
+        self.t1 = t1;
+        self.Value = Value;
+        self.LoopCount = LoopCount;
+
+class animation:
+    def __init__(self):
+        self.Frames = np.empty(0, dtype=object);
+        self.t = 0.0;
+    
+    def AddFrame(self, X0: float, Y0: float, R0: float, X1: float, Y1: float, R1: float, t1: float, Value: int, LoopCount: int = 1):
+        Frame = key_frame(X0, Y0, R0, X1, Y1, R1, t1, Value, LoopCount);
+        self.Frames = np.append(self.Frames, Frame);
+    
+    def Lerp(self, dt: float) -> (float, float, float, int):
+        X = 0; Y = 0; R = 0; Value = 0;
+        self.t += dt;
+        
+        if(self.Frames.size > 0):
+            Frame = self.Frames[0];
+            Value = Frame.Value;
+            delta = self.t / Frame.t1;
+            if(delta < 0.0):    delta = 0.0;
+            elif(delta > 1.0):  delta = 1.0;
+            a = np.sin(delta*np.pi/2);
+            X = (1.0-a)*Frame.X0 + a*Frame.X1;
+            Y = (1.0-a)*Frame.Y0 + a*Frame.Y1;
+            R = (1.0-a)*Frame.R0 + a*Frame.R1;
+            if(self.t > Frame.t1):
+                self.t -= Frame.t1;
+                if(Frame.LoopCount > 0):
+                    Frame.LoopCount -= 1;
+                    if(Frame.LoopCount == 0):
+                        self.Frames = np.delete(self.Frames, 0);
+        return X, Y, R, Value;
+
 class ui_context:
     def __init__(self):
         self.HotID = UIID_Back;
@@ -156,7 +203,6 @@ class ui_context:
         self.Assets = None;
         self.RenderGroup = None;
         self.Exiting = 0;
-        self.CreatingRoom = 0;
         self.JoinStep = 0;
         self.JoinRoomID = np.zeros(ROOM_ID_LENGTH, dtype=np.int32);
         
@@ -204,7 +250,9 @@ class ui_layout:
         
 
 class game_state:
-    def __init__(self, BoardCountX: int, BoardCountY: int, BoardDim: int):
+    def __init__(self, BoardCountX: int, BoardCountY: int, BoardDim: int, \
+                 EventLoop: asyncio.windows_events.ProactorEventLoop, \
+                 ToServerQueue: asyncio.Queue, ToClientQueue: queue):
         self.Assets = assets();
         self.UIContext = ui_context();
         self.BoardCountX = BoardCountX;
@@ -212,6 +260,128 @@ class game_state:
         self.BoardDim = BoardDim;
         self.Mode = Mode_Game;
         self.SelectedMenuItem = 0;
+        self.Boards = np.empty(0, dtype=object);
+        self.EventLoop = EventLoop;
+        self.ToServerQueue = ToServerQueue;
+        self.ToClientQueue = ToClientQueue;
+        self.RoomID = "no";
+        self.WaitingInRoom = 0;
+        self.Connected = 0;
+        self.CreatingRoomCount = 0;
+        self.ConnectingRoomID = [];
+
+class board:
+    def __init__(self):
+        self.VX = 1;
+        self.VY = 1;
+        self.Pack = np.empty(4*4, dtype=object);
+        self.Mat0 = np.zeros(4*4, dtype=np.int32);
+        self.Mat = np.zeros(4*4, dtype=np.int32);
+        self.Xs = None;
+        self.Ys = None;
+        self.Rs = None;
+        self.Ss = None;
+        self.Score = 0;
+        self.ScoreAnimation = animation();
+        self.WinAnimation = animation();
+        self.ScoreAnimation.AddFrame(0, 0, 1, 0, 0, 1, 1, self.Score, 0);
+        self.WinAnimation.AddFrame(0, 0, 1, 0, 0, 1, 1, 0, 0);
+        for i in range(4*4):
+                self.Pack[i] = animation();
+        for y in range(4):
+            for x in range(4):
+                self.Mat0[y*4+x] = 0;
+                self.Pack[y*4+x].AddFrame(x, y, 1, x, y, 1, 1, self.Mat0[y*4+x], 0);
+    
+    def BeginMoveBoard(self, VX: int, VY: int):
+        self.VX = VX;
+        self.VY = VY;
+        self.Mat = np.copy(self.Mat0);
+        self.Xs = np.empty(4*4, dtype=np.int32);
+        self.Ys = np.empty(4*4, dtype=np.int32);
+        self.Rs = np.zeros(4*4, dtype=np.int32);
+        self.Ss = np.zeros(4*4, dtype=np.int32);
+        for y in range(4):
+            for x in range(4):
+                self.Xs[y*4+x] = x;
+                self.Ys[y*4+x] = y;
+    
+    def Move(self, X0: float, Y0: float, X1: float, Y1: float) -> None:
+        self.Mat[Y1*4+X1] = self.Mat[Y0*4+X0];
+        self.Mat[Y0*4+X0] = 0;
+        self.Rs[Y1*4+X1] = self.Rs[Y0*4+X0];
+        self.Rs[Y0*4+X0] = 0;
+        for i in range(4*4):
+            if(self.Xs[i] == X0 and self.Ys[i] == Y0):
+                self.Xs[i] = X1;
+                self.Ys[i] = Y1;
+        #print("MOV: (%d,%d)->(%d,%d)" % (X0, Y0, X1, Y1));
+    
+    def Scoring(self, Value: int):
+        self.Score = Value;
+        self.ScoreAnimation = animation();
+        self.ScoreAnimation.AddFrame(0, 0, 0.8, 0, 0, 1.2, 0.1, self.Score);
+        self.ScoreAnimation.AddFrame(0, 0, 1.2, 0, 0, 1.0, 0.2, self.Score);
+        self.ScoreAnimation.AddFrame(0, 0, 1, 0, 0, 1, 1, self.Score, 0);
+    
+    def Raise(self, X: float, Y: float, Value: int) -> None:
+        self.Mat[Y*4+X] = Value;
+        self.Rs[Y*4+X] = 1;
+        self.Scoring(self.Score + (1 << Value));
+        #print("MERGE: (%d,%d) -> %d" % (X, Y, Value));
+    
+    def Delete(self, X: float, Y: float) -> None:
+        self.Mat[Y*4+X] = 0;
+        #print("DEL: (%d,%d)" % (X, Y));
+    
+    def Spawn(self, Value: int) -> None:
+        Location = [];
+        for i in range(4*4):
+            if(self.Mat[i] == 0):
+                Location.append(i);
+        if(len(Location) > 0):
+            Index = random.randint(0, len(Location)-1);
+            X = Location[Index] & 3;
+            Y = Location[Index] >> 2;
+            self.Mat[Y*4+X] = Value;
+            self.Ss[Y*4+X] = 1;
+    
+    def HasChanged(self) -> int:
+        for y in range(4):
+            for x in range(4):
+                if(self.Mat0[y*4+x] != self.Mat[y*4+x]):
+                    return 1;
+        return 0;
+    
+    def EndMoveBoard(self):
+        DoneFirstRaise = np.zeros(4*4, dtype=np.int32);
+        Xs = [3, 2, 1, 0]; Ys = [3, 2, 1, 0];
+        if(self.VX < 0): Xs = range(4);
+        if(self.VY < 0): Ys = range(4);
+        for Y0 in Ys:
+            for X0 in Xs:
+                Index = Y0*4+X0;
+                X1 = self.Xs[Index];
+                Y1 = self.Ys[Index];
+                self.Pack[Index] = animation();
+                Animation = self.Pack[Index];
+                Animation.AddFrame(X0, Y0, 1, X1, Y1, 1, 0.133, self.Mat0[Y0*4+X0]);
+                if(self.Rs[Y1*4+X1] and not DoneFirstRaise[Y1*4+X1]):
+                    Animation.AddFrame(X1, Y1, 0.2, X1, Y1, 1.1, 0.067, self.Mat[Y1*4+X1]);
+                    Animation.AddFrame(X1, Y1, 1.1, X1, Y1, 1.0, 0.100, self.Mat[Y1*4+X1]);
+                    DoneFirstRaise[Y1*4+X1] = 1;
+                else:
+                    Animation.AddFrame(X1, Y1, 1, X1, Y1, 1, 0.067, self.Mat0[Y0*4+X0]);
+                #print("(%f,%f) -> (%f,%f) [Raise=%d/%d]" % (X0, Y0, X1, Y1, self.Rs[Index], (Y1*4+X1 != Index)));
+        for Y in Ys:
+            for X in Xs:
+                Index = Y*4+X;
+                Animation = self.Pack[Index];
+                if(self.Ss[Y*4+X]):
+                    Animation.AddFrame(X, Y, 0.2, X, Y, 1.1, 0.067, self.Mat[Y*4+X]);
+                    Animation.AddFrame(X, Y, 1.1, X, Y, 1.0, 0.100, self.Mat[Y*4+X]);
+                Animation.AddFrame(X, Y, 1, X, Y, 1, 1, self.Mat[Y*4+X], 0);
+        self.Mat0 = np.copy(self.Mat);
 
 Color_Background    = v4(0.976, 0.965, 0.914, 1.0);
 Color_Board         = v4(0.733, 0.678, 0.627, 1.0);
@@ -246,6 +416,8 @@ TileColors[ 8] = v4(0.898, 0.773, 0.373, 1.0);
 TileColors[ 9] = v4(0.882, 0.745, 0.298, 1.0);
 TileColors[10] = v4(0.890, 0.737, 0.235, 1.0);
 TileColors[11] = v4(0.890, 0.729, 0.169, 1.0);
+
+Input = input();
 
 def GetWallClock() -> int:
     ClockTime = time.perf_counter_ns();
@@ -311,8 +483,12 @@ def GetKerning(Font: loaded_font, A: float, B: float) -> (float, float):
     return X, Y;
 
 def RenderBitmap(Group: render_group, X: float, Y: float, Width: float, Height: float, Color: v4, TextureHandle: int) -> None:
-    HalfWidthPerMeter = 2.0*Group.PixelPerMeter / Group.DisplayWidth;
-    HalfHeightPerMeter = 2.0*Group.PixelPerMeter / Group.DisplayHeight;
+    HalfWidthPerMeter = 0;
+    HalfHeightPerMeter = 0;
+    if(Group.DisplayWidth > 0):
+        HalfWidthPerMeter = 2.0*Group.PixelPerMeter / Group.DisplayWidth;
+    if(Group.DisplayHeight > 0):
+        HalfHeightPerMeter = 2.0*Group.PixelPerMeter / Group.DisplayHeight;
     dX = (Group.CameraX - 0.5)*2;
     dY = (Group.CameraY - 0.5)*2;
     MinX = X * HalfWidthPerMeter + dX;
@@ -381,46 +557,143 @@ def RenderString(Group: render_group, Assets: assets, \
 def GetStringRect(Group: render_group, Assets: assets, LineHeight: float, String: str) -> (float, float, float, float):
     return RenderString(Group, Assets, 0, 0, LineHeight, String, v4(0, 0, 0, 0), 1);
 
-def RenderBoard(Group: render_group, Assets: assets, AtX: float, AtY: float, BoardDim: float, Board: np.array):
+def RenderBoard(Group: render_group, Assets: assets, \
+                BoardX: float, BoardY: float, BoardDim: float, \
+                Board: board, dt: float):
     global TileColors;
     global TextColors;
     HalfDim = BoardDim * 0.5;
     BorderDim = BoardDim * 0.032;
     TileDim = (BoardDim - BorderDim*5) / 4;
     
-    RenderQuad(Group, AtX - HalfDim, AtY - HalfDim, BoardDim, BoardDim, Color_Board);
+    RenderQuad(Group, BoardX - HalfDim, BoardY - HalfDim, BoardDim, BoardDim, Color_Board);
+    Frame = Board.Pack[0].Frames[0];
     for TileY in range(4):
         for TileX in range(4):
-            X = AtX - HalfDim + (TileDim*TileX) + (BorderDim*(TileX+1));
-            Y = AtY - HalfDim + (TileDim*TileY) + (BorderDim*(TileY+1));
+            RenderQuad(Group, (BoardX-HalfDim) + BorderDim + (TileDim+BorderDim)*TileX, (BoardY-HalfDim) + BorderDim + (TileDim+BorderDim)*TileY, TileDim, TileDim, TileColors[0]);
+    
+    Xs = range(4);
+    Ys = range(4);
+    if(Board.VX < 0): Xs = [3, 2, 1, 0];
+    if(Board.VY < 0): Ys = [3, 2, 1, 0];
+    for TileY in Ys:
+        for TileX in Xs:
+            Animation = Board.Pack[TileY*4 + TileX];
+            AtX, AtY, AtR, Value = Animation.Lerp(dt);
             
-            Shift = int(Board[TileY*4 + TileX]);
-            RenderQuad(Group, X, Y, TileDim, TileDim, TileColors[Shift % TileColors.size]);
-            
+            X = (BoardX-HalfDim) + BorderDim + (TileDim+BorderDim)*AtX + (1-AtR)/2*TileDim;
+            Y = (BoardY-HalfDim) + BorderDim + (TileDim+BorderDim)*AtY + (1-AtR)/2*TileDim;
+            R = AtR*TileDim;
+    
+            Shift = int(Value);
             if(Shift > 0):
+                RenderQuad(Group, X, Y, R, R, TileColors[Shift % TileColors.size]);
                 Text = str(1 << Shift);
-                LineHeight = BoardDim*0.1;
+                LineHeight = R*0.5;
                 MinX, MinY, MaxX, MaxY = GetStringRect(Group, Assets, LineHeight, Text);
                 MaxTextRatio = 0.8;
-                if(MaxX-MinX > TileDim * MaxTextRatio): 
-                    LineHeight *= TileDim * MaxTextRatio / (MaxX-MinX);
+                if(MaxX-MinX > R * MaxTextRatio): 
+                    LineHeight *= R * MaxTextRatio / (MaxX-MinX);
                     MinX, MinY, MaxX, MaxY = GetStringRect(Group, Assets, LineHeight, Text);
                 RenderString(Group, Assets, \
-                             X+TileDim*0.5 - (MaxX-MinX)*0.5, \
-                             Y+TileDim*0.5 - (MaxY*0.5), LineHeight, \
+                             X+R*0.5 - (MaxX-MinX)*0.5, Y+R*0.5 - (MaxY*0.5), \
+                             LineHeight, \
                              Text, TextColors[Shift % TextColors.size]);
     
-    Score = 3465413;
-    ScoreLineHeight = BoardDim * 0.075;
+    Animation = Board.ScoreAnimation;
+    AtX, AtY, AtR, Score = Animation.Lerp(dt);
+    ScoreLineHeight = BoardDim * 0.075 * AtR;
     ScoreText = "Score: " + str(Score);
     MinX, MinY, MaxX, MaxY = GetStringRect(Group, Assets, ScoreLineHeight, ScoreText);
     ScoreWidth = MaxX - MinX;
     RenderString(Group, Assets, 
-                 X + TileDim - ScoreWidth, Y+TileDim + ScoreLineHeight, \
+                 BoardX+HalfDim - ScoreWidth, BoardY+HalfDim + ScoreLineHeight*0.4, \
                  ScoreLineHeight, \
                  ScoreText, v4(0, 0, 0, 1));
+    
+    Animation = Board.WinAnimation;
+    AtX, AtY, AtR, WinLose = Animation.Lerp(dt);
+    if(WinLose != 0):
+        Banner = "Lose";
+        BannerColor = v4(1.000, 0.000, 0.212, 1);
+        ShadowColor = v4(0.500, 0.000, 0.106, 1);
+        if(WinLose > 0):
+            Banner = "Win!";
+            BannerColor = v4(0.937, 0.855, 0.298, 1);
+            ShadowColor = v4(0.300, 0.250, 0.100, 1);
+        BannerLineHeight = BoardDim * 0.25 * AtR;
+        MinX, MinY, MaxX, MaxY = GetStringRect(Group, Assets, BannerLineHeight, Banner);
+        RenderString(Group, Assets, 
+                     BoardX - (MaxX-MinX)*0.5+BannerLineHeight*0.02, BoardY - (MaxY*0.5)-BannerLineHeight*0.02, \
+                     BannerLineHeight, \
+                     Banner, ShadowColor);
+        RenderString(Group, Assets, 
+                     BoardX - (MaxX-MinX)*0.5, BoardY - (MaxY*0.5), \
+                     BannerLineHeight, \
+                     Banner, BannerColor);
+        
+
+def PrintAnimation(Animation: animation):
+    for i in range(Animation.Frames.size):
+        print("[%d]: (%f, %f) -> (%f, %f) in %fs (%f) [Value:%d]" % (i, Animation.Frames[i].X0, Animation.Frames[i].Y0, Animation.Frames[i].X1, Animation.Frames[i].Y1, Animation.Frames[i].t1, Animation.t, Animation.Frames[i].Value));
 
 def UpdateAndRenderGame(Game: game_state, DisplayWidth: int, DisplayHeight: int) -> None:
+    dt = TargetSecondPerFrame;
+    if(Game.Boards.size > 0):
+        if(Game.Boards[0].WinAnimation.Frames.size > 1): dt *= 0.05;
+    while True:
+        try:
+            Message = Game.ToClientQueue.get_nowait();
+            Board = Game.Boards[Message.PlayerID];
+            if(Message.Type == "new_room_id"):
+                if(Game.CreatingRoomCount > 0):
+                    Game.WaitingInRoom = 1;
+                    Game.Connected = 0;
+                    Game.CreatingRoomCount -= 1;
+                    Game.RoomID = Message.Data.room_id;
+                    Game.ConnectingRoomID.append(Game.RoomID);
+            elif(Message.Type == "connected"):
+                if(len(Game.ConnectingRoomID) > 0):
+                    Game.RoomID = Game.ConnectingRoomID.pop();
+                    Game.WaitingInRoom = 0;
+                    Game.Connected = 1;
+                    for PlayerIndex in range(Game.BoardCountX*Game.BoardCountY):
+                        Game.Boards[PlayerIndex] = board();
+                    Game.Boards[0].BeginMoveBoard(1, 1);
+                    Game.Boards[0].Spawn(1);
+                    Game.Boards[0].EndMoveBoard();
+            elif(Message.Type == "disconnected"):
+                Game.WaitingInRoom = 0;
+                Game.Connected = 0;
+                Game.RoomID = "no";
+                QueueToServerMessage(Game.EventLoop, Game.ToServerQueue, 0, None, 1);
+            elif(Message.Type == "opponent_update"):
+                Game.Boards[1].Scoring(Message.Data.score);
+                if(Message.Data.penalty_block is not None):
+                    Value = Message.Data.penalty_block;
+                    Shift = 0;
+                    while True: 
+                        if(Value <= 1):
+                            Game.Boards[0].BeginMoveBoard(1, 1);
+                            Game.Boards[0].Spawn(Shift);
+                            Game.Boards[0].EndMoveBoard();
+                            break;
+                        else:
+                            Value = Value >> 1;
+                            Shift += 1;
+            elif(Message.Type == "opponent_win"):
+                Game.WaitingInRoom = 0;
+                Game.Connected = 0;
+                Game.RoomID = "no";
+                QueueToServerMessage(Game.EventLoop, Game.ToServerQueue, 0, None, 1);
+                Game.Boards[0].WinAnimation = animation();
+                Game.Boards[0].WinAnimation.AddFrame(0, 0, 0.6, 0, 0, 1.1, 0.075, -1);
+                Game.Boards[0].WinAnimation.AddFrame(0, 0, 1.1, 0, 0, 1.0, 0.075, -1);
+                Game.Boards[0].WinAnimation.AddFrame(0, 0, 1.0, 0, 0, 1.0, 0.250, -1);
+                Game.Boards[0].WinAnimation.AddFrame(0, 0, 1.0, 0, 0, 1.0, 1, 0, 0);
+        except queue.Empty:
+            break;
+    
     global Input;
     RenderGroup = render_group(125, DisplayWidth, DisplayHeight, 0.5, 0.5);
     Game.UIContext.BeginFrame(Input, Game.Assets, RenderGroup);
@@ -443,34 +716,148 @@ def UpdateAndRenderGame(Game: game_state, DisplayWidth: int, DisplayHeight: int)
         if(Input.IsPressed(Key_Dev2) and Game.BoardCountY > 1):
             Game.BoardCountY -= 1;
     
+    PlayerCount = Game.BoardCountX*Game.BoardCountY;
+    BoardXs = np.empty(PlayerCount, dtype=object);
+    BoardYs = np.empty(PlayerCount, dtype=object);
     BorderWidth = Game.BoardDim * 0.25;
-    Boards = np.empty(Game.BoardCountX*Game.BoardCountY, dtype=object);
-    BoardXs = np.empty(Game.BoardCountX, dtype=object);
-    BoardYs = np.empty(Game.BoardCountY, dtype=object);
-    for Index in range(Game.BoardCountX*Game.BoardCountY):
-        Boards[Index] = np.zeros(4*4, dtype=int);
-        Board = Boards[Index];
-        for y in range(4):
-            for x in range(4):
-                Board[y*4+x] = x+y;
+    for BoardY in range(Game.BoardCountY):
+        for BoardX in range(Game.BoardCountX):
+            Index = BoardY*Game.BoardCountX + BoardX;
+            BoardXs[Index] = (BoardX - (Game.BoardCountX-1)/2) * (Game.BoardDim + BorderWidth);
+            BoardYs[Index] = (BoardY - (Game.BoardCountY-1)/2) * (Game.BoardDim + BorderWidth);
+    
+    if(PlayerCount != Game.Boards.size):
+        Boards = np.empty(PlayerCount, dtype=object);
+        for Index in range(PlayerCount):
+            if(Index < Game.Boards.size):
+                Boards[Index] = Game.Boards[Index];
+            else:
+                Boards[Index] = board();
+                Boards[Index].BeginMoveBoard(1, 1);
+                Boards[Index].Spawn(1);
+                Boards[Index].EndMoveBoard();
+        Game.Boards = Boards;
+    
+    Board = Game.Boards[0];
+    for i in range(4*4):
+        if(Board.Mat[i] == 5 and Game.Connected):
+            Game.Connected = 0;
+            QueueToServerMessage(Game.EventLoop, Game.ToServerQueue, 0, ClientWinMessage(int(Board.Score)));
+            Game.Boards[0].WinAnimation = animation();
+            Game.Boards[0].WinAnimation.AddFrame(0, 0, 0.6, 0, 0, 1.1, 0.075, 1);
+            Game.Boards[0].WinAnimation.AddFrame(0, 0, 1.1, 0, 0, 1.0, 0.075, 1);
+            Game.Boards[0].WinAnimation.AddFrame(0, 0, 1.0, 0, 0, 1.0, 0.250, 1);
+            Game.Boards[0].WinAnimation.AddFrame(0, 0, 1.0, 0, 0, 1.0, 1, 0, 0);
     
     if(Game.Mode == Mode_Game):
-        if(Input.IsDown(Key_Right)):
-            for Index in range(Game.BoardCountX*Game.BoardCountY):
-                Board = Boards[Index];
-                for y in range(4):
-                    for x in [2, 1, 0]:
-                        Board[y*4+x+1] = Board[y*4+x];
-        
+        for PlayerIndex in range(1):
+            Board = Game.Boards[PlayerIndex];
+            if(Board.WinAnimation.Frames.size <= 1):
+                if(Input.IsPressed(Key_Up)):
+                    Board.BeginMoveBoard(1, 1);
+                    for k in range(3):
+                        for x in range(4):
+                            for y in [2,1,0]:
+                                if(Board.Mat[y*4+x] != 0 and Board.Mat[(y+1)*4+x] == 0):
+                                    Board.Move(x, y, x, y+1);
+                    for x in range(4):
+                        for y in [2,1,0]:
+                            if(Board.Mat[y*4+x] == Board.Mat[(y+1)*4+x] and Board.Mat[y*4+x] != 0):
+                                Value = Board.Mat[y*4+x] + 1;
+                                Board.Delete(x, y+1);
+                                Board.Move(x, y, x, y+1);
+                                Board.Raise(x, y+1, Value);
+                                if(Game.Connected):
+                                    QueueToServerMessage(Game.EventLoop, Game.ToServerQueue, 0, \
+                                                         ClientUpdateMessage(int(Board.Score), int(1 << Value)));
+                    for k in range(3):
+                        for x in range(4):
+                            for y in [2,1,0]:
+                                if(Board.Mat[y*4+x] != 0 and Board.Mat[(y+1)*4+x] == 0):
+                                    Board.Move(x, y, x, y+1);
+                    if(Board.HasChanged()):
+                        Board.Spawn(1);
+                    Board.EndMoveBoard();
+                if(Input.IsPressed(Key_Down)):
+                    Board.BeginMoveBoard(1, -1);
+                    for k in range(3):
+                        for x in range(4):
+                            for y in range(1, 4):
+                                if(Board.Mat[y*4+x] != 0 and Board.Mat[(y-1)*4+x] == 0):
+                                    Board.Move(x, y, x, y-1);
+                    for x in range(4):
+                        for y in range(1, 4):
+                            if(Board.Mat[y*4+x] == Board.Mat[(y-1)*4+x] and Board.Mat[y*4+x] != 0):
+                                Value = Board.Mat[y*4+x] + 1;
+                                Board.Delete(x, y-1);
+                                Board.Move(x, y, x, y-1);
+                                Board.Raise(x, y-1, Value);
+                                if(Game.Connected):
+                                    QueueToServerMessage(Game.EventLoop, Game.ToServerQueue, 0, \
+                                                         ClientUpdateMessage(int(Board.Score), int(1 << Value)));
+                    for k in range(3):
+                        for x in range(4):
+                            for y in range(1, 4):
+                                if(Board.Mat[y*4+x] != 0 and Board.Mat[(y-1)*4+x] == 0):
+                                    Board.Move(x, y, x, y-1);
+                    if(Board.HasChanged()):
+                        Board.Spawn(1);
+                    Board.EndMoveBoard();
+                if(Input.IsPressed(Key_Left)):
+                    Board.BeginMoveBoard(-1, 1);
+                    for k in range(3):
+                        for y in range(4):
+                            for x in range(1, 4):
+                                if(Board.Mat[y*4+x] != 0 and Board.Mat[y*4+x-1] == 0):
+                                    Board.Move(x, y, x-1, y);
+                    for y in range(4):
+                        for x in range(1, 4):
+                            if(Board.Mat[y*4+x] == Board.Mat[y*4+x-1] and Board.Mat[y*4+x] != 0):
+                                Value = Board.Mat[y*4+x] + 1;
+                                Board.Delete(x-1, y);
+                                Board.Move(x, y, x-1, y);
+                                Board.Raise(x-1, y, Value);
+                                if(Game.Connected):
+                                    QueueToServerMessage(Game.EventLoop, Game.ToServerQueue, 0, \
+                                                         ClientUpdateMessage(int(Board.Score), int(1 << Value)));
+                    for k in range(3):
+                        for y in range(4):
+                            for x in range(1, 4):
+                                if(Board.Mat[y*4+x] != 0 and Board.Mat[y*4+x-1] == 0):
+                                    Board.Move(x, y, x-1, y);
+                    if(Board.HasChanged()):
+                        Board.Spawn(1);
+                    Board.EndMoveBoard();
+                if(Input.IsPressed(Key_Right)):
+                    Board.BeginMoveBoard(1, 1);
+                    for k in range(3):
+                        for y in range(4):
+                            for x in [2,1,0]:
+                                if(Board.Mat[y*4+x] != 0 and Board.Mat[y*4+x+1] == 0):
+                                    Board.Move(x, y, x+1, y);
+                    for y in range(4):
+                        for x in [2,1,0]:
+                            if(Board.Mat[y*4+x] == Board.Mat[y*4+x+1] and Board.Mat[y*4+x] != 0):
+                                Value = Board.Mat[y*4+x] + 1;
+                                Board.Delete(x+1, y);
+                                Board.Move(x, y, x+1, y);
+                                Board.Raise(x+1, y, Value);
+                                if(Game.Connected):
+                                    QueueToServerMessage(Game.EventLoop, Game.ToServerQueue, 0, \
+                                                         ClientUpdateMessage(int(Board.Score), int(1 << Value)));
+                    for k in range(3):
+                        for y in range(4):
+                            for x in [2,1,0]:
+                                if(Board.Mat[y*4+x] != 0 and Board.Mat[y*4+x+1] == 0):
+                                    Board.Move(x, y, x+1, y);
+                    if(Board.HasChanged()):
+                        Board.Spawn(1);
+                    Board.EndMoveBoard();
     
-    for Index in range(Game.BoardCountX):
-        BoardXs[Index] = (Index - (Game.BoardCountX-1)/2) * (Game.BoardDim + BorderWidth);
-    for Index in range(Game.BoardCountY):
-        BoardYs[Index] = (Index - (Game.BoardCountY-1)/2) * (Game.BoardDim + BorderWidth);
-    
-    for y in range(Game.BoardCountY):
-        for x in range(Game.BoardCountX):
-            RenderBoard(RenderGroup, Game.Assets, BoardXs[x], BoardYs[y], Game.BoardDim, Boards[y*Game.BoardCountX+x]);
+    for Index in range(PlayerCount):
+        RenderBoard(RenderGroup, Game.Assets, \
+                    BoardXs[Index], BoardYs[Index], Game.BoardDim, \
+                    Game.Boards[Index], dt);
     
     if(Game.Mode == Mode_Menu):
         Context = Game.UIContext;
@@ -479,18 +866,24 @@ def UpdateAndRenderGame(Game: game_state, DisplayWidth: int, DisplayHeight: int)
         if(Context.Input.IsPressed(Key_Down) and (Context.HotID < UIID_Exit)):
             Context.HotID += 1;
         
+        if(Context.HotID != UIID_JoinRoom):     Context.JoinStep = 0;
+        if(Context.HotID != UIID_Exit):         Context.Exiting = 0;
+        
         ScreenRenderGroup = render_group(1, DisplayWidth, DisplayHeight, 0, 0);
         RenderQuad(ScreenRenderGroup, 0, 0, DisplayWidth, DisplayHeight, v4(0.0, 0.0, 0.0, 0.5));
         Layout = ui_layout(Context, 0.0, 1.5);
-        Layout.DoUIItem(UIID_None, "In Room: 16516514", "14714653");
+        Hint = "waiting";
+        if(Game.Connected): Hint = "connected";
+        Layout.DoUIItem(UIID_None, "In Room: %s (%s)" % (Game.RoomID, Hint), "");
         if(Layout.DoUIItem(UIID_Back, "Back", "back to game")):
             Game.Mode = Mode_Game;
         
         CreateLabel = "Create Room";
-        if(Context.CreatingRoom):
+        if(Game.CreatingRoomCount > 0):
             CreateLabel = "trying...";
         if(Layout.DoUIItem(UIID_CreateRoom, CreateLabel, "create a new room")):
-            Context.CreatingRoom = 1;
+            Game.CreatingRoomCount += 1;
+            QueueToServerMessage(Game.EventLoop, Game.ToServerQueue, 0, NewRoomRequest());
         
         JoinLabel = "Join Room";
         if(Context.JoinStep == 1):
@@ -505,7 +898,10 @@ def UpdateAndRenderGame(Game: game_state, DisplayWidth: int, DisplayHeight: int)
                 Context.JoinRoomCaret -= 1;
                 Context.JoinRoomID[Context.JoinRoomCaret] = ord('_');
         elif(Context.JoinStep == 2):
-            JoinLabel = "joining...";
+            if(len(Game.ConnectingRoomID) == 0):
+                Context.JoinStep = 0;
+            else:
+                JoinLabel = "joining...";
         
         if(Layout.DoUIItem(UIID_JoinRoom, JoinLabel, "enter ID to join a room")):
             if(Context.JoinStep == 0):
@@ -516,6 +912,11 @@ def UpdateAndRenderGame(Game: game_state, DisplayWidth: int, DisplayHeight: int)
             elif(Context.JoinStep == 1):
                 if(Context.JoinRoomCaret == ROOM_ID_LENGTH):
                     Context.JoinStep = 2;
+                    RoomID = "";
+                    for i in range(ROOM_ID_LENGTH):
+                        RoomID = RoomID + chr(Context.JoinRoomID[i]);
+                    Game.ConnectingRoomID.append(RoomID);
+                    QueueToServerMessage(Game.EventLoop, Game.ToServerQueue, 0, ConnectRequest(RoomID));
                 
         
         ExitLabel = "Exit";
@@ -527,9 +928,6 @@ def UpdateAndRenderGame(Game: game_state, DisplayWidth: int, DisplayHeight: int)
             else:
                 Context.Exiting = 1;
         
-        if(Context.HotID != UIID_CreateRoom):   Context.CreatingRoom = 0;
-        if(Context.HotID != UIID_JoinRoom):     Context.JoinStep = 0;
-        if(Context.HotID != UIID_Exit):         Context.Exiting = 0;
         Layout.DoTooltip();
             
     Input.EndFrame();
@@ -577,7 +975,69 @@ def CursorMoveHandler(Window, X: float, Y: float):
     Input.MouseX = X;
     Input.MouseY = Y;
 
+class to_client_message:
+    def __init__(self, PlayerID: int, Type: int, Data):
+        self.PlayerID = PlayerID;
+        self.Type = Type;
+        self.Data = Data;
+
+class to_server_message:
+    def __init__(self, PlayerID: int, Data, GonnaByeBye: int):
+        self.PlayerID = PlayerID;
+        self.Data = Data;
+        self.GonnaByeBye = GonnaByeBye;
+
+async def OneClientListenEvent(Queue: queue, ID: int, Client: WebSocketClientProtocol):
+    async for Type, Data in receive_events(Client):
+        Message = to_client_message(ID, Type, Data);
+        Queue.put(Message);
+
+async def WorkerSendToServerMessage(EventLoop: asyncio.windows_events.ProactorEventLoop, \
+                                    ToServerQueue: asyncio.Queue, ToClientQueue: queue, \
+                                    Clients: list[WebSocketClientProtocol]):
+    while True:
+        Message = await ToServerQueue.get();
+        if(Clients[Message.PlayerID] is None):
+            Clients[Message.PlayerID] = await connect("ws://localhost:1357");
+            EventLoop.create_task(OneClientListenEvent(ToClientQueue, Message.PlayerID, Clients[Message.PlayerID]));
+        if(Message.GonnaByeBye):
+            await Clients[Message.PlayerID].close();
+            Clients[Message.PlayerID] = None;
+        else:
+            await send_event(Clients[Message.PlayerID], Message.Data);
+        ToServerQueue.task_done();
+
+async def MessageLoop(EventLoop: asyncio.windows_events.ProactorEventLoop, \
+                      ToServerQueue: asyncio.Queue, ToClientQueue: queue, \
+                      Clients: list[WebSocketClientProtocol]):
+    #async with connect("ws://localhost:1357") as ws1, \
+    #           connect("ws://localhost:1357") as ws2:
+    EventLoop.create_task(WorkerSendToServerMessage(EventLoop, ToServerQueue, ToClientQueue, Clients));
+    Tasks = asyncio.all_tasks(EventLoop);
+    await asyncio.gather(*Tasks);
+
+def MessageThread(EventLoop: asyncio.windows_events.ProactorEventLoop, \
+                  ToServerQueue: asyncio.Queue, ToClientQueue: queue, \
+                  Clients: list[WebSocketClientProtocol]):
+    asyncio.set_event_loop(EventLoop);
+    Task = EventLoop.create_task(MessageLoop(EventLoop, ToServerQueue, ToClientQueue, Clients));
+    EventLoop.run_until_complete(Task);
+
+async def PutToServerMessage(ToServerQueue: asyncio.Queue, ID: int, Data, GonnaByeBye):
+    await ToServerQueue.put(to_server_message(ID, Data, GonnaByeBye));
+
+def QueueToServerMessage(EventLoop: asyncio.windows_events.ProactorEventLoop, \
+                         ToServerQueue: asyncio.Queue, ID: int, Data, GonnaByeBye: int = 0):
+    asyncio.run_coroutine_threadsafe(PutToServerMessage(ToServerQueue, ID, Data, GonnaByeBye), EventLoop);
+
 def main():
+    EventLoop = asyncio.new_event_loop();
+    ToServerQueue = asyncio.Queue();
+    ToClientQueue = queue.Queue();
+    Clients = [None, None];
+    ThreadHandle = threading.Thread(target=MessageThread, args=(EventLoop, ToServerQueue, ToClientQueue, Clients), daemon=True);
+    ThreadHandle.start();
+    
     glfw.init();
     Window = glfw.create_window(1280, 720, "2048 battle", None, None);
     glfw.make_context_current(Window);
@@ -590,28 +1050,43 @@ def main():
     glfw.set_key_callback(Window, KeyHandler);
     glfw.set_mouse_button_callback(Window, MouseButtonHandler);
     glfw.set_cursor_pos_callback(Window, CursorMoveHandler);
-    GameState = game_state(2, 1, 4);
+    GameState = game_state(2, 1, 4, EventLoop, ToServerQueue, ToClientQueue);
     
     GlobalRunning = True;
+    FrameTime = 0.0;
     FrameStart = GetWallClock();
     FrameEnd = FrameStart;
     while GlobalRunning:
         WindowWidth, WindowHeight = glfw.get_framebuffer_size(Window);
         gl.glViewport(0, 0, WindowWidth, WindowHeight);
         gl.glClear(gl.GL_COLOR_BUFFER_BIT);
-        
+        global TargetSecondPerFrame;
         UpdateAndRenderGame(GameState, WindowWidth, WindowHeight);
+        ScreenRenderGroup = render_group(1, WindowWidth, WindowHeight, 0, 0);
+        FPS = 0.0;
+        if(FrameTime != 0.0):
+            FPS = 1000000000 / FrameTime;
+        RenderString(ScreenRenderGroup, GameState.Assets, 0, 0, 18, "FPS: %f" % FPS, v4(1, 1, 1, 1));
         
         glfw.swap_buffers(Window);
         if(glfw.window_should_close(Window)):
             GlobalRunning = False;
+        
+        glfw.poll_events();
         FrameEnd = GetWallClock();
         TimeElapsed = (FrameEnd - FrameStart) / 1000000000;
-        TargetSecondPerFrame = 1.0 / 30.0;
         RemainTime = TargetSecondPerFrame - TimeElapsed;
-        if(RemainTime < 0.0):
-            RemainTime = 0.0;
-        glfw.wait_events_timeout(RemainTime);
+        #wait_events_timeout precision makes people sad.
+        while(RemainTime > 0.01):
+            glfw.wait_events_timeout(RemainTime-0.01);
+            FrameEnd = GetWallClock();
+            TimeElapsed = (FrameEnd - FrameStart) / 1000000000;
+            RemainTime = TargetSecondPerFrame - TimeElapsed
+        while(RemainTime > 0.0):
+            FrameEnd = GetWallClock();
+            TimeElapsed = (FrameEnd - FrameStart) / 1000000000;
+            RemainTime = TargetSecondPerFrame - TimeElapsed
+        FrameTime = (FrameEnd - FrameStart);
         FrameStart = FrameEnd;
 
 LOGLEVEL = os.environ.get("LOGLEVEL", "INFO").upper()
@@ -625,8 +1100,9 @@ async def handle_ws1(ws: WebSocketClientProtocol):
     await send_event(ws, ClientUpdateMessage(123, 64))
     await asyncio.sleep(1)
     await send_event(ws, ClientUpdateMessage(8763, 512))
-    await asyncio.sleep(2)
+    await asyncio.sleep(1)
     await send_event(ws, ClientWinMessage(8763))
+    await ws.close();
     async for type, data in receive_events(ws):
         logging.info(("ws1", type, data))
         if type == "disconnected":
@@ -640,6 +1116,7 @@ async def handle_ws2(ws: WebSocketClientProtocol):
     assert type == "connected"
     await asyncio.sleep(3)
     await send_event(ws, ClientUpdateMessage(3535, 256))
+    await ws.close();
     async for type, data in receive_events(ws):
         logging.info(("ws2", type, data))
         if type == "opponent_win":
@@ -647,9 +1124,8 @@ async def handle_ws2(ws: WebSocketClientProtocol):
             break
 
 async def test_message():
-    async with connect("ws://localhost:1357") as ws1, connect(
-        "ws://localhost:1357"
-    ) as ws2:
+    async with connect("ws://localhost:1357") as ws1, \
+               connect("ws://localhost:1357") as ws2:
         await send_event(ws1, NewRoomRequest())
         type, data = await anext(receive_events(ws1))
         logging.info((type, data))
