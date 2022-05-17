@@ -4,7 +4,7 @@ from messages import *
 from shared_utils import receive_events, next_event, send_event
 import logging
 import os
-
+import random
 import numpy as np
 import glfw
 import time
@@ -109,7 +109,8 @@ class input:
         return None;
 
 Input = input();
-
+Board = [];
+first_start = False;
 class loaded_glyph:
     def __init__(self, \
                  dX: float, dY: float, DimX: float, DimY: float, \
@@ -246,6 +247,8 @@ TileColors[ 8] = v4(0.898, 0.773, 0.373, 1.0);
 TileColors[ 9] = v4(0.882, 0.745, 0.298, 1.0);
 TileColors[10] = v4(0.890, 0.737, 0.235, 1.0);
 TileColors[11] = v4(0.890, 0.729, 0.169, 1.0);
+
+
 
 def GetWallClock() -> int:
     ClockTime = time.perf_counter_ns();
@@ -419,9 +422,19 @@ def RenderBoard(Group: render_group, Assets: assets, AtX: float, AtY: float, Boa
                  X + TileDim - ScoreWidth, Y+TileDim + ScoreLineHeight, \
                  ScoreLineHeight, \
                  ScoreText, v4(0, 0, 0, 1));
+def add_two(mat):
+    Board = mat
+    column_produce = random.randint(0,3)
+    row_produce = random.randint(0,3)
+    while Board[row_produce*4+column_produce]!=0:
+        column_produce = random.randint(0,3)
+        row_produce = random.randint(0,3)
+    Board[row_produce*4+column_produce] = 1
+    return Board
 
-def UpdateAndRenderGame(Game: game_state, DisplayWidth: int, DisplayHeight: int) -> None:
+def UpdateAndRenderGame(Game: game_state, DisplayWidth: int, DisplayHeight: int, BoardTemp) -> None:
     global Input;
+    global first_start
     RenderGroup = render_group(125, DisplayWidth, DisplayHeight, 0.5, 0.5);
     Game.UIContext.BeginFrame(Input, Game.Assets, RenderGroup);
     
@@ -447,22 +460,91 @@ def UpdateAndRenderGame(Game: game_state, DisplayWidth: int, DisplayHeight: int)
     Boards = np.empty(Game.BoardCountX*Game.BoardCountY, dtype=object);
     BoardXs = np.empty(Game.BoardCountX, dtype=object);
     BoardYs = np.empty(Game.BoardCountY, dtype=object);
+    
     for Index in range(Game.BoardCountX*Game.BoardCountY):
-        Boards[Index] = np.zeros(4*4, dtype=int);
+        Boards[Index] = BoardTemp;
         Board = Boards[Index];
+
+    if first_start == False:
+        #for Index in range(Game.BoardCountX*Game.BoardCountY):
+        Board = add_two(Board)
+        Board = add_two(Board)
         for y in range(4):
             for x in range(4):
-                Board[y*4+x] = x+y;
-    
-    if(Game.Mode == Mode_Game):
-        if(Input.IsDown(Key_Right)):
-            for Index in range(Game.BoardCountX*Game.BoardCountY):
-                Board = Boards[Index];
-                for y in range(4):
-                    for x in [2, 1, 0]:
-                        Board[y*4+x+1] = Board[y*4+x];
+                Board[y*4+x] = 1;        
+        first_start = True
         
-    
+
+    if(Game.Mode == Mode_Game):
+        if(Input.IsPressed(Key_Left)):
+            for k in range(3):
+                for row in range(4):
+                    for col in range(3):
+                        if Board[row*4+col]==0 and Board[row*4+col+1]!=0:
+                            Board[row*4+col],Board[row*4+col+1] = Board[row*4+col+1],Board[row*4+col]
+            for row in range(4):
+                for col in range(3):
+                    if Board[row*4+col] == Board[row*4+col+1] and Board[row*4+col]!=0:
+                        Board[row*4+col] = Board[row*4+col]+1
+                        Board[row*4+col+1] = 0
+            for k in range(3):
+                for row in range(4):
+                    for col in range(3):
+                        if Board[row*4+col]==0 and Board[row*4+col+1]!=0:
+                            Board[row*4+col],Board[row*4+col+1] = Board[row*4+col+1],Board[row*4+col]
+            Board = add_two(Board)
+        elif(Input.IsPressed(Key_Right)):
+            for k in range(3):
+                for row in range(4):
+                    for col in range(3,0,-1):
+                        if Board[row*4+col]==0 and Board[row*4+col-1]!=0:
+                            Board[row*4+col],Board[row*4+col-1] = Board[row*4+col-1],Board[row*4+col]
+            for row in range(4):
+                for col in range(3,0,-1):
+                    if Board[row*4+col] == Board[row*4+col-1] and Board[row*4+col]!=0:
+                        Board[row*4+col] = Board[row*4+col]+1
+                        Board[row*4+col-1] = 0
+            for k in range(3):
+                for row in range(4):
+                    for col in range(3,0,-1):
+                        if Board[row*4+col]==0 and Board[row*4+col-1]!=0:
+                            Board[row*4+col],Board[row*4+col-1] = Board[row*4+col-1],Board[row*4+col]
+            Board = add_two(Board)
+        elif(Input.IsPressed(Key_Down)):
+            for k in range(3):
+                for col in range(4):
+                    for row in range(3):
+                        if Board[row*4+col]==0 and Board[(row+1)*4+col]!=0:
+                            Board[row*4+col],Board[(row+1)*4+col] = Board[(row+1)*4+col],Board[row*4+col]
+            for col in range(4):
+                for row in range(3):
+                    if Board[row*4+col] == Board[(row+1)*4+col] and Board[row*4+col]!=0:
+                        Board[row*4+col] = Board[row*4+col]+1
+                        Board[(row+1)*4+col] = 0
+            for k in range(3):
+                for col in range(4):
+                    for row in range(3):
+                        if Board[row*4+col]==0 and Board[(row+1)*4+col]!=0:
+                            Board[row*4+col],Board[(row+1)*4+col] = Board[(row+1)*4+col],Board[row*4+col]
+            
+            Board = add_two(Board)
+        elif(Input.IsPressed(Key_Up)):
+            for k in range(3):
+                for col in range(4):
+                    for row in range(3,0,-1):
+                        if Board[row*4+col]==0 and Board[(row-1)*4+col]!=0:
+                            Board[row*4+col],Board[(row-1)*4+col] = Board[(row-1)*4+col],Board[row*4+col]
+            for col in range(4):
+                for row in range(3,0,-1):
+                    if Board[row*4+col] == Board[(row-1)*4+col] and Board[row*4+col]!=0:
+                        Board[row*4+col] = Board[row*4+col]+1
+                        Board[(row-1)*4+col] = 0
+            for k in range(3):
+                for col in range(4):
+                    for row in range(3,0,-1):
+                        if Board[row*4+col]==0 and Board[(row-1)*4+col]!=0:
+                            Board[row*4+col],Board[(row-1)*4+col] = Board[(row-1)*4+col],Board[row*4+col]
+            Board = add_two(Board)
     for Index in range(Game.BoardCountX):
         BoardXs[Index] = (Index - (Game.BoardCountX-1)/2) * (Game.BoardDim + BorderWidth);
     for Index in range(Game.BoardCountY):
@@ -531,8 +613,9 @@ def UpdateAndRenderGame(Game: game_state, DisplayWidth: int, DisplayHeight: int)
         if(Context.HotID != UIID_JoinRoom):     Context.JoinStep = 0;
         if(Context.HotID != UIID_Exit):         Context.Exiting = 0;
         Layout.DoTooltip();
-            
+        
     Input.EndFrame();
+    return Boards[0]
 
 def KeyHandler(Window, Key: int, ScanCode: int, Action: int, Mods: int):
     IsDown = (Action == glfw.PRESS) or (Action == glfw.REPEAT);
@@ -578,6 +661,7 @@ def CursorMoveHandler(Window, X: float, Y: float):
     Input.MouseY = Y;
 
 def main():
+    global touch_once
     glfw.init();
     Window = glfw.create_window(1280, 720, "2048 battle", None, None);
     glfw.make_context_current(Window);
@@ -595,13 +679,13 @@ def main():
     GlobalRunning = True;
     FrameStart = GetWallClock();
     FrameEnd = FrameStart;
+    BoardTemp = np.zeros(4*4, dtype=int)
     while GlobalRunning:
         WindowWidth, WindowHeight = glfw.get_framebuffer_size(Window);
         gl.glViewport(0, 0, WindowWidth, WindowHeight);
         gl.glClear(gl.GL_COLOR_BUFFER_BIT);
-        
-        UpdateAndRenderGame(GameState, WindowWidth, WindowHeight);
-        
+        Temp = UpdateAndRenderGame(GameState, WindowWidth, WindowHeight,BoardTemp);
+        BoardTemp = Temp
         glfw.swap_buffers(Window);
         if(glfw.window_should_close(Window)):
             GlobalRunning = False;
