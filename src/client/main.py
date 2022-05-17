@@ -883,6 +883,7 @@ def UpdateAndRenderGame(Game: game_state, DisplayWidth: int, DisplayHeight: int)
             CreateLabel = "trying...";
         if(Layout.DoUIItem(UIID_CreateRoom, CreateLabel, "create a new room")):
             Game.CreatingRoomCount += 1;
+            QueueToServerMessage(Game.EventLoop, Game.ToServerQueue, 0, None, 1);
             QueueToServerMessage(Game.EventLoop, Game.ToServerQueue, 0, NewRoomRequest());
         
         JoinLabel = "Join Room";
@@ -916,6 +917,7 @@ def UpdateAndRenderGame(Game: game_state, DisplayWidth: int, DisplayHeight: int)
                     for i in range(ROOM_ID_LENGTH):
                         RoomID = RoomID + chr(Context.JoinRoomID[i]);
                     Game.ConnectingRoomID.append(RoomID);
+                    QueueToServerMessage(Game.EventLoop, Game.ToServerQueue, 0, None, 1);
                     QueueToServerMessage(Game.EventLoop, Game.ToServerQueue, 0, ConnectRequest(RoomID));
                 
         
@@ -1001,8 +1003,9 @@ async def WorkerSendToServerMessage(EventLoop: asyncio.windows_events.ProactorEv
             Clients[Message.PlayerID] = await connect("ws://localhost:1357");
             EventLoop.create_task(OneClientListenEvent(ToClientQueue, Message.PlayerID, Clients[Message.PlayerID]));
         if(Message.GonnaByeBye):
-            await Clients[Message.PlayerID].close();
-            Clients[Message.PlayerID] = None;
+            if(Clients[Message.PlayerID] is not None):
+                await Clients[Message.PlayerID].close();
+                Clients[Message.PlayerID] = None;
         else:
             await send_event(Clients[Message.PlayerID], Message.Data);
         ToServerQueue.task_done();
@@ -1023,7 +1026,7 @@ def MessageThread(EventLoop: asyncio.windows_events.ProactorEventLoop, \
     Task = EventLoop.create_task(MessageLoop(EventLoop, ToServerQueue, ToClientQueue, Clients));
     EventLoop.run_until_complete(Task);
 
-async def PutToServerMessage(ToServerQueue: asyncio.Queue, ID: int, Data, GonnaByeBye):
+async def PutToServerMessage(ToServerQueue: asyncio.Queue, ID: int, Data, GonnaByeBye:int):
     await ToServerQueue.put(to_server_message(ID, Data, GonnaByeBye));
 
 def QueueToServerMessage(EventLoop: asyncio.windows_events.ProactorEventLoop, \
