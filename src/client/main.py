@@ -468,10 +468,7 @@ def UpdateAndRenderGame(Game: game_state, DisplayWidth: int, DisplayHeight: int,
     if first_start == False:
         #for Index in range(Game.BoardCountX*Game.BoardCountY):
         Board = add_two(Board)
-        Board = add_two(Board)
-        for y in range(4):
-            for x in range(4):
-                Board[y*4+x] = 1;        
+        Board = add_two(Board)      
         first_start = True
         
 
