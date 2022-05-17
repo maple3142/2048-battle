@@ -4,6 +4,7 @@ from messages import *
 from shared_utils import receive_events, next_event, send_event
 import logging
 import os
+from typing import Tuple
 
 import numpy as np
 import glfw
@@ -174,7 +175,7 @@ class animation:
         Frame = key_frame(X0, Y0, R0, X1, Y1, R1, t1, Value, LoopCount);
         self.Frames = np.append(self.Frames, Frame);
     
-    def Lerp(self, dt: float) -> (float, float, float, int):
+    def Lerp(self, dt: float) -> Tuple[float, float, float, int]:
         X = 0; Y = 0; R = 0; Value = 0;
         self.t += dt;
         
@@ -437,7 +438,7 @@ def LoadTexture(Width: int, Height: int, Buffer: np.array) -> int:
     gl.glBindTexture(gl.GL_TEXTURE_2D, 0);
     return TextureHandle;
 
-def LoadGlyph(Font: loaded_font, Codepoint: int) -> (float, float, float, float, int, int, np.array):
+def LoadGlyph(Font: loaded_font, Codepoint: int) -> Tuple[float, float, float, float, int, int, np.array]:
     Font.Handle.load_char(Codepoint);
     Glyph = Font.Handle.glyph;
     
@@ -473,7 +474,7 @@ def GetGlyph(Font: loaded_font, Codepoint: int) -> loaded_glyph:
         Result = Font.Glyphs[Codepoint];
     return Result;
 
-def GetKerning(Font: loaded_font, A: float, B: float) -> (float, float):
+def GetKerning(Font: loaded_font, A: float, B: float) -> Tuple[float, float]:
     X = 0;
     Y = 0;
     if(Font.Handle.has_kerning):
@@ -525,7 +526,7 @@ def RenderBorder(Group: render_group, X: float, Y: float, Width: float, Height: 
     RenderQuad(Group, X, Y+Height, Width, 0.02, Color);
 
 def RenderString(Group: render_group, Assets: assets, \
-                 X: float, Y: float, LineHeight: float, String: str, Color: v4, DimOnly: int = 0) -> (float, float, float, float):
+                 X: float, Y: float, LineHeight: float, String: str, Color: v4, DimOnly: int = 0) -> Tuple[float, float, float, float]:
     MinX = X;
     MinY = Y;
     MaxX = X;
@@ -554,7 +555,7 @@ def RenderString(Group: render_group, Assets: assets, \
             PrevCodepoint = Codepoint;
     return MinX, MinY, MaxX, MaxY;
 
-def GetStringRect(Group: render_group, Assets: assets, LineHeight: float, String: str) -> (float, float, float, float):
+def GetStringRect(Group: render_group, Assets: assets, LineHeight: float, String: str) -> Tuple[float, float, float, float]:
     return RenderString(Group, Assets, 0, 0, LineHeight, String, v4(0, 0, 0, 0), 1);
 
 def RenderBoard(Group: render_group, Assets: assets, \
