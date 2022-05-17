@@ -10,7 +10,7 @@ import glfw
 import time
 import OpenGL.GL as gl
 import freetype
-
+import math
 ROOM_ID_LENGTH = 8;
 
 Font_Game   = 0;
@@ -413,7 +413,13 @@ def RenderBoard(Group: render_group, Assets: assets, AtX: float, AtY: float, Boa
                              Y+TileDim*0.5 - (MaxY*0.5), LineHeight, \
                              Text, TextColors[Shift % TextColors.size]);
     
-    Score = 3465413;
+    tempScore = 0
+    for i in range(Board.size):
+        if tempScore <= Board[i]:
+            tempScore = Board[i]
+    Score = int(math.pow(2,tempScore))
+    if Score==1:
+        Score=0
     ScoreLineHeight = BoardDim * 0.075;
     ScoreText = "Score: " + str(Score);
     MinX, MinY, MaxX, MaxY = GetStringRect(Group, Assets, ScoreLineHeight, ScoreText);
@@ -431,6 +437,11 @@ def add_two(mat):
         row_produce = random.randint(0,3)
     Board[row_produce*4+column_produce] = 1
     return Board
+
+def Attack_Opponent(num : int):
+    num = math.pow(2,num)
+    print(str(num) + " attack!")
+    #要用什麼擾亂對手可以再考慮
 
 def UpdateAndRenderGame(Game: game_state, DisplayWidth: int, DisplayHeight: int, BoardTemp) -> None:
     global Input;
@@ -461,9 +472,10 @@ def UpdateAndRenderGame(Game: game_state, DisplayWidth: int, DisplayHeight: int,
     BoardXs = np.empty(Game.BoardCountX, dtype=object);
     BoardYs = np.empty(Game.BoardCountY, dtype=object);
     
-    for Index in range(Game.BoardCountX*Game.BoardCountY):
-        Boards[Index] = BoardTemp;
-        Board = Boards[Index];
+    #for Index in range(Game.BoardCountX*Game.BoardCountY):
+    Boards[1] = np.zeros(4*4, dtype=int)# wait for opponent data
+    Boards[0] = BoardTemp;
+    Board = Boards[0];
 
     if first_start == False:
         #for Index in range(Game.BoardCountX*Game.BoardCountY):
@@ -483,6 +495,8 @@ def UpdateAndRenderGame(Game: game_state, DisplayWidth: int, DisplayHeight: int,
                 for col in range(3):
                     if Board[row*4+col] == Board[row*4+col+1] and Board[row*4+col]!=0:
                         Board[row*4+col] = Board[row*4+col]+1
+                        if Board[row*4+col] >= 6:
+                            Attack_Opponent(Board[row*4+col])
                         Board[row*4+col+1] = 0
             for k in range(3):
                 for row in range(4):
@@ -500,6 +514,8 @@ def UpdateAndRenderGame(Game: game_state, DisplayWidth: int, DisplayHeight: int,
                 for col in range(3,0,-1):
                     if Board[row*4+col] == Board[row*4+col-1] and Board[row*4+col]!=0:
                         Board[row*4+col] = Board[row*4+col]+1
+                        if Board[row*4+col] >= 6:
+                            Attack_Opponent(Board[row*4+col])
                         Board[row*4+col-1] = 0
             for k in range(3):
                 for row in range(4):
@@ -517,6 +533,8 @@ def UpdateAndRenderGame(Game: game_state, DisplayWidth: int, DisplayHeight: int,
                 for row in range(3):
                     if Board[row*4+col] == Board[(row+1)*4+col] and Board[row*4+col]!=0:
                         Board[row*4+col] = Board[row*4+col]+1
+                        if Board[row*4+col] >= 6:
+                            Attack_Opponent(Board[row*4+col])
                         Board[(row+1)*4+col] = 0
             for k in range(3):
                 for col in range(4):
@@ -535,6 +553,8 @@ def UpdateAndRenderGame(Game: game_state, DisplayWidth: int, DisplayHeight: int,
                 for row in range(3,0,-1):
                     if Board[row*4+col] == Board[(row-1)*4+col] and Board[row*4+col]!=0:
                         Board[row*4+col] = Board[row*4+col]+1
+                        if Board[row*4+col] >= 6:
+                            Attack_Opponent(Board[row*4+col])
                         Board[(row-1)*4+col] = 0
             for k in range(3):
                 for col in range(4):
@@ -546,7 +566,7 @@ def UpdateAndRenderGame(Game: game_state, DisplayWidth: int, DisplayHeight: int,
         BoardXs[Index] = (Index - (Game.BoardCountX-1)/2) * (Game.BoardDim + BorderWidth);
     for Index in range(Game.BoardCountY):
         BoardYs[Index] = (Index - (Game.BoardCountY-1)/2) * (Game.BoardDim + BorderWidth);
-    
+    print(Game.BoardCountX)
     for y in range(Game.BoardCountY):
         for x in range(Game.BoardCountX):
             RenderBoard(RenderGroup, Game.Assets, BoardXs[x], BoardYs[y], Game.BoardDim, Boards[y*Game.BoardCountX+x]);
