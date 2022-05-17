@@ -251,7 +251,7 @@ class ui_layout:
 
 class game_state:
     def __init__(self, BoardCountX: int, BoardCountY: int, BoardDim: int, \
-                 EventLoop: asyncio.windows_events.ProactorEventLoop, \
+                 EventLoop: asyncio.AbstractEventLoop, \
                  ToServerQueue: asyncio.Queue, ToClientQueue: queue):
         self.Assets = assets();
         self.UIContext = ui_context();
@@ -994,7 +994,7 @@ async def OneClientListenEvent(Queue: queue, ID: int, Client: WebSocketClientPro
         Message = to_client_message(ID, Type, Data);
         Queue.put(Message);
 
-async def WorkerSendToServerMessage(EventLoop: asyncio.windows_events.ProactorEventLoop, \
+async def WorkerSendToServerMessage(EventLoop: asyncio.AbstractEventLoop, \
                                     ToServerQueue: asyncio.Queue, ToClientQueue: queue, \
                                     Clients: list[WebSocketClientProtocol]):
     while True:
@@ -1010,7 +1010,7 @@ async def WorkerSendToServerMessage(EventLoop: asyncio.windows_events.ProactorEv
             await send_event(Clients[Message.PlayerID], Message.Data);
         ToServerQueue.task_done();
 
-async def MessageLoop(EventLoop: asyncio.windows_events.ProactorEventLoop, \
+async def MessageLoop(EventLoop: asyncio.AbstractEventLoop, \
                       ToServerQueue: asyncio.Queue, ToClientQueue: queue, \
                       Clients: list[WebSocketClientProtocol]):
     #async with connect("ws://localhost:1357") as ws1, \
@@ -1019,7 +1019,7 @@ async def MessageLoop(EventLoop: asyncio.windows_events.ProactorEventLoop, \
     Tasks = asyncio.all_tasks(EventLoop);
     await asyncio.gather(*Tasks);
 
-def MessageThread(EventLoop: asyncio.windows_events.ProactorEventLoop, \
+def MessageThread(EventLoop: asyncio.AbstractEventLoop, \
                   ToServerQueue: asyncio.Queue, ToClientQueue: queue, \
                   Clients: list[WebSocketClientProtocol]):
     asyncio.set_event_loop(EventLoop);
@@ -1029,7 +1029,7 @@ def MessageThread(EventLoop: asyncio.windows_events.ProactorEventLoop, \
 async def PutToServerMessage(ToServerQueue: asyncio.Queue, ID: int, Data, GonnaByeBye:int):
     await ToServerQueue.put(to_server_message(ID, Data, GonnaByeBye));
 
-def QueueToServerMessage(EventLoop: asyncio.windows_events.ProactorEventLoop, \
+def QueueToServerMessage(EventLoop: asyncio.AbstractEventLoop, \
                          ToServerQueue: asyncio.Queue, ID: int, Data, GonnaByeBye: int = 0):
     asyncio.run_coroutine_threadsafe(PutToServerMessage(ToServerQueue, ID, Data, GonnaByeBye), EventLoop);
 
