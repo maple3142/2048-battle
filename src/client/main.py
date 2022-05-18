@@ -60,6 +60,12 @@ UIID_CreateRoom = 2;
 UIID_JoinRoom   = 3;
 UIID_Exit       = 4;
 
+Banner_None     = 0;
+Banner_Win      = 1;
+Banner_Lose     = 2;
+Banner_Draw     = 3;
+Banner_NoMove   = 4;
+
 TargetFPS = 60.0;
 TargetSecondPerFrame = 1.0 / TargetFPS;
 
@@ -284,15 +290,25 @@ class board:
         self.Ss = None;
         self.Score = 0;
         self.ScoreAnimation = animation();
-        self.WinAnimation = animation();
+        self.BannerAnimation = animation();
         self.ScoreAnimation.AddFrame(0, 0, 1, 0, 0, 1, 1, self.Score, 0);
-        self.WinAnimation.AddFrame(0, 0, 1, 0, 0, 1, 1, 0, 0);
+        self.BannerAnimation.AddFrame(0, 0, 1, 0, 0, 1, 1, 0, 0);
         for i in range(4*4):
                 self.Pack[i] = animation();
         for y in range(4):
             for x in range(4):
                 self.Mat0[y*4+x] = 0;
                 self.Pack[y*4+x].AddFrame(x, y, 1, x, y, 1, 1, self.Mat0[y*4+x], 0);
+    
+    def ToList(self) -> list[list[int]]:
+        BoardList = \
+        [ \
+            [int(self.Mat[ 0]), int(self.Mat[ 1]), int(self.Mat[ 2]), int(self.Mat[ 3])], \
+            [int(self.Mat[ 4]), int(self.Mat[ 5]), int(self.Mat[ 6]), int(self.Mat[ 7])], \
+            [int(self.Mat[ 8]), int(self.Mat[ 9]), int(self.Mat[10]), int(self.Mat[11])], \
+            [int(self.Mat[12]), int(self.Mat[13]), int(self.Mat[14]), int(self.Mat[15])], \
+        ];
+        return BoardList;
     
     def BeginMoveBoard(self, VX: int, VY: int):
         self.VX = VX;
@@ -328,12 +344,15 @@ class board:
     def Raise(self, X: float, Y: float, Value: int) -> None:
         self.Mat[Y*4+X] = Value;
         self.Rs[Y*4+X] = 1;
-        self.Scoring(self.Score + (1 << Value));
         #print("MERGE: (%d,%d) -> %d" % (X, Y, Value));
     
     def Delete(self, X: float, Y: float) -> None:
         self.Mat[Y*4+X] = 0;
         #print("DEL: (%d,%d)" % (X, Y));
+    
+    def SpawnAt(self, X: int, Y: int, Value: int):
+        self.Mat[Y*4+X] = Value;
+        self.Ss[Y*4+X] = 1;
     
     def Spawn(self, Value: int) -> None:
         Location = [];
@@ -344,8 +363,7 @@ class board:
             Index = random.randint(0, len(Location)-1);
             X = Location[Index] & 3;
             Y = Location[Index] >> 2;
-            self.Mat[Y*4+X] = Value;
-            self.Ss[Y*4+X] = 1;
+            self.SpawnAt(X, Y, Value);
     
     def HasChanged(self) -> int:
         for y in range(4):
@@ -383,6 +401,122 @@ class board:
                     Animation.AddFrame(X, Y, 1.1, X, Y, 1.0, 0.100, self.Mat[Y*4+X]);
                 Animation.AddFrame(X, Y, 1, X, Y, 1, 1, self.Mat[Y*4+X], 0);
         self.Mat0 = np.copy(self.Mat);
+    
+    def DoMoveUp(self) -> Tuple[int, list[int]]:
+        Score = 0;
+        Penalties = [];
+        for k in range(3):
+            for x in range(4):
+                for y in [2,1,0]:
+                    if(self.Mat[y*4+x] != 0 and self.Mat[(y+1)*4+x] == 0):
+                        self.Move(x, y, x, y+1);
+        for x in range(4):
+            for y in [2,1,0]:
+                if(self.Mat[y*4+x] == self.Mat[(y+1)*4+x] and self.Mat[y*4+x] != 0):
+                    Value = self.Mat[y*4+x] + 1;
+                    self.Delete(x, y+1);
+                    self.Move(x, y, x, y+1);
+                    self.Raise(x, y+1, Value);
+                    Score += (1 << Value);
+                    Penalties.append(int(1 << Value));
+        for k in range(3):
+            for x in range(4):
+                for y in [2,1,0]:
+                    if(self.Mat[y*4+x] != 0 and self.Mat[(y+1)*4+x] == 0):
+                        self.Move(x, y, x, y+1);
+        return int(Score), Penalties;
+    
+    def DoMoveDown(self) -> Tuple[int, list[int]]:
+        Score = 0;
+        Penalties = [];
+        for k in range(3):
+            for x in range(4):
+                for y in range(1, 4):
+                    if(self.Mat[y*4+x] != 0 and self.Mat[(y-1)*4+x] == 0):
+                        self.Move(x, y, x, y-1);
+        for x in range(4):
+            for y in range(1, 4):
+                if(self.Mat[y*4+x] == self.Mat[(y-1)*4+x] and self.Mat[y*4+x] != 0):
+                    Value = self.Mat[y*4+x] + 1;
+                    self.Delete(x, y-1);
+                    self.Move(x, y, x, y-1);
+                    self.Raise(x, y-1, Value);
+                    Score += (1 << Value);
+                    Penalties.append(int(1 << Value));
+        for k in range(3):
+            for x in range(4):
+                for y in range(1, 4):
+                    if(self.Mat[y*4+x] != 0 and self.Mat[(y-1)*4+x] == 0):
+                        self.Move(x, y, x, y-1);
+        return int(Score), Penalties;
+    
+    def DoMoveLeft(self) -> Tuple[int, list[int]]:
+        Score = 0;
+        Penalties = [];
+        for k in range(3):
+            for y in range(4):
+                for x in range(1, 4):
+                    if(self.Mat[y*4+x] != 0 and self.Mat[y*4+x-1] == 0):
+                        self.Move(x, y, x-1, y);
+        for y in range(4):
+            for x in range(1, 4):
+                if(self.Mat[y*4+x] == self.Mat[y*4+x-1] and self.Mat[y*4+x] != 0):
+                    Value = self.Mat[y*4+x] + 1;
+                    self.Delete(x-1, y);
+                    self.Move(x, y, x-1, y);
+                    self.Raise(x-1, y, Value);
+                    Score += (1 << Value);
+                    Penalties.append(int(1 << Value));
+        for k in range(3):
+            for y in range(4):
+                for x in range(1, 4):
+                    if(self.Mat[y*4+x] != 0 and self.Mat[y*4+x-1] == 0):
+                        self.Move(x, y, x-1, y);
+        return int(Score), Penalties;
+    
+    def DoMoveRight(self) -> Tuple[int, list[int]]:
+        Score = 0;
+        Penalties = [];
+        for k in range(3):
+            for y in range(4):
+                for x in [2,1,0]:
+                    if(self.Mat[y*4+x] != 0 and self.Mat[y*4+x+1] == 0):
+                        self.Move(x, y, x+1, y);
+        for y in range(4):
+            for x in [2,1,0]:
+                if(self.Mat[y*4+x] == self.Mat[y*4+x+1] and self.Mat[y*4+x] != 0):
+                    Value = self.Mat[y*4+x] + 1;
+                    self.Delete(x+1, y);
+                    self.Move(x, y, x+1, y);
+                    self.Raise(x+1, y, Value);
+                    Score += (1 << Value);
+                    Penalties.append(int(1 << Value));
+        for k in range(3):
+            for y in range(4):
+                for x in [2,1,0]:
+                    if(self.Mat[y*4+x] != 0 and self.Mat[y*4+x+1] == 0):
+                        self.Move(x, y, x+1, y);
+        return int(Score), Penalties;
+    
+    def HasMove(self) -> int:
+        for y in range(4):
+            for x in range(4):
+                if(self.Mat[y*4+x] == 0): return 1;
+        PaddedMat = np.zeros(6*6, dtype=np.int32);
+        for y in range(4):
+            for x in range(4):
+                PaddedMat[(y+1)*6+(x+1)] = self.Mat[y*4+x];
+        for y in range(4):
+            for x in range(4):
+                PaddedMat[(y+1)*6+(x+1)] = self.Mat[y*4+x];
+        for y in range(1, 5):
+            for x in range(1, 5):
+                if(PaddedMat[y*6+x] == PaddedMat[y*6+(x-1)] or \
+                   PaddedMat[y*6+x] == PaddedMat[y*6+(x+1)] or \
+                   PaddedMat[y*6+x] == PaddedMat[(y-1)*6+x] or \
+                   PaddedMat[y*6+x] == PaddedMat[(y+1)*6+x]):
+                    return 1;
+        return 0;
 
 Color_Background    = v4(0.976, 0.965, 0.914, 1.0);
 Color_Board         = v4(0.733, 0.678, 0.627, 1.0);
@@ -612,16 +746,28 @@ def RenderBoard(Group: render_group, Assets: assets, \
                  ScoreLineHeight, \
                  ScoreText, v4(0, 0, 0, 1));
     
-    Animation = Board.WinAnimation;
-    AtX, AtY, AtR, WinLose = Animation.Lerp(dt);
-    if(WinLose != 0):
-        Banner = "Lose";
-        BannerColor = v4(1.000, 0.000, 0.212, 1);
-        ShadowColor = v4(0.500, 0.000, 0.106, 1);
-        if(WinLose > 0):
+    Animation = Board.BannerAnimation;
+    AtX, AtY, AtR, BannerType = Animation.Lerp(dt);
+    if(BannerType != Banner_None):
+        Banner = "";
+        BannerColor = v4(0, 0, 0, 0);
+        ShadowColor = v4(0, 0, 0, 0);
+        if(BannerType == Banner_Win):
             Banner = "Win!";
             BannerColor = v4(0.937, 0.855, 0.298, 1);
             ShadowColor = v4(0.300, 0.250, 0.100, 1);
+        elif(BannerType == Banner_Lose):
+            Banner = "Lose!";
+            BannerColor = v4(1.000, 0.000, 0.212, 1);
+            ShadowColor = v4(0.500, 0.000, 0.106, 1);
+        elif(BannerType == Banner_Draw):
+            Banner = "Draw";
+            BannerColor = v4(1.000, 0.000, 0.212, 1);
+            ShadowColor = v4(0.500, 0.000, 0.106, 1);
+        elif(BannerType == Banner_NoMove):
+            Banner = "No Move";
+            BannerColor = v4(1.000, 0.000, 0.212, 1);
+            ShadowColor = v4(0.500, 0.000, 0.106, 1);
         BannerLineHeight = BoardDim * 0.25 * AtR;
         MinX, MinY, MaxX, MaxY = GetStringRect(Group, Assets, BannerLineHeight, Banner);
         RenderString(Group, Assets, 
@@ -640,8 +786,6 @@ def PrintAnimation(Animation: animation):
 
 def UpdateAndRenderGame(Game: game_state, DisplayWidth: int, DisplayHeight: int) -> None:
     dt = TargetSecondPerFrame;
-    if(Game.Boards.size > 0):
-        if(Game.Boards[0].WinAnimation.Frames.size > 1): dt *= 0.05;
     while True:
         try:
             Message = Game.ToClientQueue.get_nowait();
@@ -663,35 +807,84 @@ def UpdateAndRenderGame(Game: game_state, DisplayWidth: int, DisplayHeight: int)
                     Game.Boards[0].BeginMoveBoard(1, 1);
                     Game.Boards[0].Spawn(1);
                     Game.Boards[0].EndMoveBoard();
+                    InitData = ClientUpdateMessage(score=0, new_blocks=[], \
+                                                   board=Game.Boards[0].ToList(), \
+                                                   move_direction=Direction.NONE);
+                    QueueToServerMessage(Game.EventLoop, Game.ToServerQueue, 0, InitData);
             elif(Message.Type == "disconnected"):
                 Game.WaitingInRoom = 0;
                 Game.Connected = 0;
                 Game.RoomID = "no";
-                QueueToServerMessage(Game.EventLoop, Game.ToServerQueue, 0, None, 1);
+                QueueToServerMessage(Game.EventLoop, Game.ToServerQueue, 0, None, GonnaByeBye=1);
             elif(Message.Type == "opponent_update"):
-                Game.Boards[1].Scoring(Message.Data.score);
-                if(Message.Data.penalty_block is not None):
-                    Value = Message.Data.penalty_block;
+                if(Message.Data.score != Game.Boards[1].Score):
+                    Game.Boards[1].Scoring(Message.Data.score);
+                Game.Boards[0].BeginMoveBoard(1, 1);
+                for Penalty in Message.Data.penalty_blocks:
                     Shift = 0;
-                    while True: 
-                        if(Value <= 1):
-                            Game.Boards[0].BeginMoveBoard(1, 1);
+                    for i in range(32): 
+                        if(Penalty <= 1):
                             Game.Boards[0].Spawn(Shift);
-                            Game.Boards[0].EndMoveBoard();
                             break;
                         else:
-                            Value = Value >> 1;
+                            Penalty = Penalty >> 1;
                             Shift += 1;
+                if(Game.Boards[0].HasChanged()):
+                    PenaltyData = ClientUpdateMessage(score=Game.Boards[0].Score, new_blocks=[], \
+                                                      board=Game.Boards[0].ToList(), \
+                                                      move_direction=Direction.NONE);
+                    QueueToServerMessage(Game.EventLoop, Game.ToServerQueue, 0, PenaltyData);
+                Game.Boards[0].EndMoveBoard();
+                if(Message.Data.move_direction == Direction.UP):
+                    Game.Boards[1].BeginMoveBoard(1, 1);
+                    Game.Boards[1].DoMoveUp();
+                elif(Message.Data.move_direction == Direction.DOWN):
+                    Game.Boards[1].BeginMoveBoard(1, -1);
+                    Game.Boards[1].DoMoveDown();
+                elif(Message.Data.move_direction == Direction.LEFT):
+                    Game.Boards[1].BeginMoveBoard(-1, 1);
+                    Game.Boards[1].DoMoveLeft();
+                elif(Message.Data.move_direction == Direction.RIGHT):
+                    Game.Boards[1].BeginMoveBoard(1, 1);
+                    Game.Boards[1].DoMoveRight();
+                else:
+                    Game.Boards[1].BeginMoveBoard(1, 1);
+                
+                for y in range(4):
+                    for x in range(4):
+                        if(Game.Boards[1].Mat[y*4+x] != Message.Data.board[y][x]):
+                            if(Message.Data.board[y][x] != 0):
+                                Game.Boards[1].SpawnAt(x, y, Message.Data.board[y][x]);
+                            else:
+                                Game.Boards[1].Delete(x, y);
+                Game.Boards[1].EndMoveBoard();
             elif(Message.Type == "opponent_win"):
                 Game.WaitingInRoom = 0;
                 Game.Connected = 0;
                 Game.RoomID = "no";
-                QueueToServerMessage(Game.EventLoop, Game.ToServerQueue, 0, None, 1);
-                Game.Boards[0].WinAnimation = animation();
-                Game.Boards[0].WinAnimation.AddFrame(0, 0, 0.6, 0, 0, 1.1, 0.075, -1);
-                Game.Boards[0].WinAnimation.AddFrame(0, 0, 1.1, 0, 0, 1.0, 0.075, -1);
-                Game.Boards[0].WinAnimation.AddFrame(0, 0, 1.0, 0, 0, 1.0, 0.250, -1);
-                Game.Boards[0].WinAnimation.AddFrame(0, 0, 1.0, 0, 0, 1.0, 1, 0, 0);
+                QueueToServerMessage(Game.EventLoop, Game.ToServerQueue, 0, None, GonnaByeBye=1);
+                if(Message.Data.score == -1):
+                    Game.Boards[0].BannerAnimation = animation();
+                    Game.Boards[0].BannerAnimation.AddFrame(0, 0, 0.6, 0, 0, 1.1, 0.075, Banner_Draw);
+                    Game.Boards[0].BannerAnimation.AddFrame(0, 0, 1.1, 0, 0, 1.0, 0.075, Banner_Draw);
+                    Game.Boards[0].BannerAnimation.AddFrame(0, 0, 1.0, 0, 0, 1.0, 0.250, Banner_Draw);
+                    Game.Boards[0].BannerAnimation.AddFrame(0, 0, 1.0, 0, 0, 1.0, 1.000, Banner_None, 0);
+                    Game.Boards[1].BannerAnimation = animation();
+                    Game.Boards[1].BannerAnimation.AddFrame(0, 0, 0.6, 0, 0, 1.1, 0.075, Banner_Draw);
+                    Game.Boards[1].BannerAnimation.AddFrame(0, 0, 1.1, 0, 0, 1.0, 0.075, Banner_Draw);
+                    Game.Boards[1].BannerAnimation.AddFrame(0, 0, 1.0, 0, 0, 1.0, 0.250, Banner_Draw);
+                    Game.Boards[1].BannerAnimation.AddFrame(0, 0, 1.0, 0, 0, 1.0, 1.000, Banner_None, 0);
+                else:
+                    Game.Boards[0].BannerAnimation = animation();
+                    Game.Boards[0].BannerAnimation.AddFrame(0, 0, 0.6, 0, 0, 1.1, 0.075, Banner_Lose);
+                    Game.Boards[0].BannerAnimation.AddFrame(0, 0, 1.1, 0, 0, 1.0, 0.075, Banner_Lose);
+                    Game.Boards[0].BannerAnimation.AddFrame(0, 0, 1.0, 0, 0, 1.0, 0.250, Banner_Lose);
+                    Game.Boards[0].BannerAnimation.AddFrame(0, 0, 1.0, 0, 0, 1.0, 1.000, Banner_None, 0);
+                    Game.Boards[1].BannerAnimation = animation();
+                    Game.Boards[1].BannerAnimation.AddFrame(0, 0, 0.6, 0, 0, 1.1, 0.075, Banner_Win);
+                    Game.Boards[1].BannerAnimation.AddFrame(0, 0, 1.1, 0, 0, 1.0, 0.075, Banner_Win);
+                    Game.Boards[1].BannerAnimation.AddFrame(0, 0, 1.0, 0, 0, 1.0, 0.250, Banner_Win);
+                    Game.Boards[1].BannerAnimation.AddFrame(0, 0, 1.0, 0, 0, 1.0, 1.000, Banner_None, 0);
         except queue.Empty:
             break;
     
@@ -739,126 +932,156 @@ def UpdateAndRenderGame(Game: game_state, DisplayWidth: int, DisplayHeight: int)
                 Boards[Index].EndMoveBoard();
         Game.Boards = Boards;
     
-    Board = Game.Boards[0];
-    for i in range(4*4):
-        if(Board.Mat[i] == 5 and Game.Connected):
+    if(Game.Connected):
+        Banner0 = Banner_None;
+        Banner1 = Banner_None;
+        for i in range(4*4):
+            if(Game.Boards[0].Mat[i] == 11):
+                Banner0 = Banner_Win;
+                Banner1 = Banner_Lose;
+        if(Banner0 == Banner_None and Banner1 == Banner_None):
+            PlayerCanMove = Game.Boards[0].HasMove();
+            OpponentCanMove = Game.Boards[1].HasMove();
+            if(not PlayerCanMove and not OpponentCanMove):
+                if(Game.Boards[0].Score > Game.Boards[1].Score):
+                    Banner0 = Banner_Win;
+                    Banner1 = Banner_Lose;
+                elif(Game.Boards[0].Score < Game.Boards[1].Score):
+                    #NOTE: wait for opponent declare winning
+                    pass;
+                else:
+                    Banner0 = Banner_Draw;
+                    Banner1 = Banner_Draw;
+            elif(not PlayerCanMove):
+                if(Game.Boards[0].Score < Game.Boards[1].Score):
+                    #NOTE: wait for opponent declare winning
+                    pass;
+                else:
+                    Banner0 = Banner_NoMove;
+            elif(not OpponentCanMove):
+                if(Game.Boards[0].Score > Game.Boards[1].Score):
+                    Banner0 = Banner_Win;
+                    Banner1 = Banner_Lose;
+                else:
+                    Banner1 = Banner_NoMove;
+        
+        if(Banner0 == Banner_Win):
+            Game.WaitingInRoom = 0;
             Game.Connected = 0;
-            QueueToServerMessage(Game.EventLoop, Game.ToServerQueue, 0, ClientWinMessage(int(Board.Score)));
-            Game.Boards[0].WinAnimation = animation();
-            Game.Boards[0].WinAnimation.AddFrame(0, 0, 0.6, 0, 0, 1.1, 0.075, 1);
-            Game.Boards[0].WinAnimation.AddFrame(0, 0, 1.1, 0, 0, 1.0, 0.075, 1);
-            Game.Boards[0].WinAnimation.AddFrame(0, 0, 1.0, 0, 0, 1.0, 0.250, 1);
-            Game.Boards[0].WinAnimation.AddFrame(0, 0, 1.0, 0, 0, 1.0, 1, 0, 0);
+            Game.RoomID = "no";
+            QueueToServerMessage(Game.EventLoop, Game.ToServerQueue, 0, ClientWinMessage(int(Game.Boards[0].Score)));
+            QueueToServerMessage(Game.EventLoop, Game.ToServerQueue, 0, None, GonnaByeBye=1);
+        elif(Banner0 == Banner_Draw):
+            Game.WaitingInRoom = 0;
+            Game.Connected = 0;
+            Game.RoomID = "no";
+            QueueToServerMessage(Game.EventLoop, Game.ToServerQueue, 0, ClientWinMessage(int(-1)));
+            QueueToServerMessage(Game.EventLoop, Game.ToServerQueue, 0, None, GonnaByeBye=1);
+        
+        if(Banner0 == Banner_NoMove):
+            if(Game.Boards[0].BannerAnimation.Frames.size <= 1):
+                #stub a frame to prevent the animation replaying again and again.
+                Game.Boards[0].BannerAnimation = animation();
+                Game.Boards[0].BannerAnimation.AddFrame(0, 0, 0.6, 0, 0, 1.1, 0.075, Banner_NoMove);
+                Game.Boards[0].BannerAnimation.AddFrame(0, 0, 1.1, 0, 0, 1.0, 0.075, Banner_NoMove);
+                Game.Boards[0].BannerAnimation.AddFrame(0, 0, 1.0, 0, 0, 1.0, 0.250, Banner_NoMove);
+                Game.Boards[0].BannerAnimation.AddFrame(0, 0, 1.0, 0, 0, 1.0, 1.000, Banner_NoMove, 0);
+                Game.Boards[0].BannerAnimation.AddFrame(0, 0, 1.0, 0, 0, 1.0, 1.000, Banner_NoMove, 0);
+        elif(Banner0 != Banner_None):
+            Game.Boards[0].BannerAnimation = animation();
+            Game.Boards[0].BannerAnimation.AddFrame(0, 0, 0.6, 0, 0, 1.1, 0.075, Banner0);
+            Game.Boards[0].BannerAnimation.AddFrame(0, 0, 1.1, 0, 0, 1.0, 0.075, Banner0);
+            Game.Boards[0].BannerAnimation.AddFrame(0, 0, 1.0, 0, 0, 1.0, 0.250, Banner0);
+            Game.Boards[0].BannerAnimation.AddFrame(0, 0, 1.0, 0, 0, 1.0, 1.000, Banner_None, 0);
+        if(Banner1 == Banner_NoMove):
+            if(Game.Boards[1].BannerAnimation.Frames.size <= 1):
+                #stub a frame to prevent the animation replaying again and again.
+                Game.Boards[1].BannerAnimation = animation();
+                Game.Boards[1].BannerAnimation.AddFrame(0, 0, 0.6, 0, 0, 1.1, 0.075, Banner_NoMove);
+                Game.Boards[1].BannerAnimation.AddFrame(0, 0, 1.1, 0, 0, 1.0, 0.075, Banner_NoMove);
+                Game.Boards[1].BannerAnimation.AddFrame(0, 0, 1.0, 0, 0, 1.0, 0.250, Banner_NoMove);
+                Game.Boards[1].BannerAnimation.AddFrame(0, 0, 1.0, 0, 0, 1.0, 1.000, Banner_NoMove, 0);
+                Game.Boards[1].BannerAnimation.AddFrame(0, 0, 1.0, 0, 0, 1.0, 1.000, Banner_NoMove, 0);
+        elif(Banner1 != Banner_None):
+            Game.Boards[1].BannerAnimation = animation();
+            Game.Boards[1].BannerAnimation.AddFrame(0, 0, 0.6, 0, 0, 1.1, 0.075, Banner1);
+            Game.Boards[1].BannerAnimation.AddFrame(0, 0, 1.1, 0, 0, 1.0, 0.075, Banner1);
+            Game.Boards[1].BannerAnimation.AddFrame(0, 0, 1.0, 0, 0, 1.0, 0.250, Banner1);
+            Game.Boards[1].BannerAnimation.AddFrame(0, 0, 1.0, 0, 0, 1.0, 1.000, Banner_None, 0);
     
     if(Game.Mode == Mode_Game):
         for PlayerIndex in range(1):
             Board = Game.Boards[PlayerIndex];
-            if(Board.WinAnimation.Frames.size <= 1):
+            if(not Game.Connected and not Board.HasMove() and Input.IsPressed(Key_Space)):
+                Game.Boards[PlayerIndex] = board();
+                Game.Boards[PlayerIndex].BeginMoveBoard(1, 1);
+                Game.Boards[PlayerIndex].Spawn(1);
+                Game.Boards[PlayerIndex].EndMoveBoard();
+            
+            if(Board.BannerAnimation.Frames.size <= 1):
                 if(Input.IsPressed(Key_Up)):
                     Board.BeginMoveBoard(1, 1);
-                    for k in range(3):
-                        for x in range(4):
-                            for y in [2,1,0]:
-                                if(Board.Mat[y*4+x] != 0 and Board.Mat[(y+1)*4+x] == 0):
-                                    Board.Move(x, y, x, y+1);
-                    for x in range(4):
-                        for y in [2,1,0]:
-                            if(Board.Mat[y*4+x] == Board.Mat[(y+1)*4+x] and Board.Mat[y*4+x] != 0):
-                                Value = Board.Mat[y*4+x] + 1;
-                                Board.Delete(x, y+1);
-                                Board.Move(x, y, x, y+1);
-                                Board.Raise(x, y+1, Value);
-                                if(Game.Connected):
-                                    QueueToServerMessage(Game.EventLoop, Game.ToServerQueue, 0, \
-                                                         ClientUpdateMessage(int(Board.Score), int(1 << Value)));
-                    for k in range(3):
-                        for x in range(4):
-                            for y in [2,1,0]:
-                                if(Board.Mat[y*4+x] != 0 and Board.Mat[(y+1)*4+x] == 0):
-                                    Board.Move(x, y, x, y+1);
+                    ScoreDelta, Penalties = Board.DoMoveUp();
                     if(Board.HasChanged()):
                         Board.Spawn(1);
+                        if(ScoreDelta != 0):
+                            Board.Scoring(Board.Score + ScoreDelta);
+                        if(Game.Connected):
+                            Data = ClientUpdateMessage(score=int(Board.Score), new_blocks=Penalties, \
+                                                       board=Board.ToList(), move_direction=Direction.UP);
+                            QueueToServerMessage(Game.EventLoop, Game.ToServerQueue, 0, Data);
+                    else:
+                        assert len(Penalties) == 0 and ScoreDelta == 0;
                     Board.EndMoveBoard();
                 if(Input.IsPressed(Key_Down)):
                     Board.BeginMoveBoard(1, -1);
-                    for k in range(3):
-                        for x in range(4):
-                            for y in range(1, 4):
-                                if(Board.Mat[y*4+x] != 0 and Board.Mat[(y-1)*4+x] == 0):
-                                    Board.Move(x, y, x, y-1);
-                    for x in range(4):
-                        for y in range(1, 4):
-                            if(Board.Mat[y*4+x] == Board.Mat[(y-1)*4+x] and Board.Mat[y*4+x] != 0):
-                                Value = Board.Mat[y*4+x] + 1;
-                                Board.Delete(x, y-1);
-                                Board.Move(x, y, x, y-1);
-                                Board.Raise(x, y-1, Value);
-                                if(Game.Connected):
-                                    QueueToServerMessage(Game.EventLoop, Game.ToServerQueue, 0, \
-                                                         ClientUpdateMessage(int(Board.Score), int(1 << Value)));
-                    for k in range(3):
-                        for x in range(4):
-                            for y in range(1, 4):
-                                if(Board.Mat[y*4+x] != 0 and Board.Mat[(y-1)*4+x] == 0):
-                                    Board.Move(x, y, x, y-1);
+                    ScoreDelta, Penalties = Board.DoMoveDown();
                     if(Board.HasChanged()):
                         Board.Spawn(1);
+                        if(ScoreDelta != 0):
+                            Board.Scoring(Board.Score + ScoreDelta);
+                        if(Game.Connected):
+                            Data = ClientUpdateMessage(score=int(Board.Score), new_blocks=Penalties, \
+                                                       board=Board.ToList(), move_direction=Direction.DOWN);
+                            QueueToServerMessage(Game.EventLoop, Game.ToServerQueue, 0, Data);
+                    else:
+                        assert len(Penalties) == 0 and ScoreDelta == 0;
                     Board.EndMoveBoard();
                 if(Input.IsPressed(Key_Left)):
                     Board.BeginMoveBoard(-1, 1);
-                    for k in range(3):
-                        for y in range(4):
-                            for x in range(1, 4):
-                                if(Board.Mat[y*4+x] != 0 and Board.Mat[y*4+x-1] == 0):
-                                    Board.Move(x, y, x-1, y);
-                    for y in range(4):
-                        for x in range(1, 4):
-                            if(Board.Mat[y*4+x] == Board.Mat[y*4+x-1] and Board.Mat[y*4+x] != 0):
-                                Value = Board.Mat[y*4+x] + 1;
-                                Board.Delete(x-1, y);
-                                Board.Move(x, y, x-1, y);
-                                Board.Raise(x-1, y, Value);
-                                if(Game.Connected):
-                                    QueueToServerMessage(Game.EventLoop, Game.ToServerQueue, 0, \
-                                                         ClientUpdateMessage(int(Board.Score), int(1 << Value)));
-                    for k in range(3):
-                        for y in range(4):
-                            for x in range(1, 4):
-                                if(Board.Mat[y*4+x] != 0 and Board.Mat[y*4+x-1] == 0):
-                                    Board.Move(x, y, x-1, y);
+                    ScoreDelta, Penalties = Board.DoMoveLeft();
                     if(Board.HasChanged()):
                         Board.Spawn(1);
+                        if(ScoreDelta != 0):
+                            Board.Scoring(Board.Score + ScoreDelta);
+                        if(Game.Connected):
+                            Data = ClientUpdateMessage(score=int(Board.Score), new_blocks=Penalties, \
+                                                       board=Board.ToList(), move_direction=Direction.LEFT);
+                            QueueToServerMessage(Game.EventLoop, Game.ToServerQueue, 0, Data);
+                    else:
+                        assert len(Penalties) == 0 and ScoreDelta == 0;
                     Board.EndMoveBoard();
                 if(Input.IsPressed(Key_Right)):
                     Board.BeginMoveBoard(1, 1);
-                    for k in range(3):
-                        for y in range(4):
-                            for x in [2,1,0]:
-                                if(Board.Mat[y*4+x] != 0 and Board.Mat[y*4+x+1] == 0):
-                                    Board.Move(x, y, x+1, y);
-                    for y in range(4):
-                        for x in [2,1,0]:
-                            if(Board.Mat[y*4+x] == Board.Mat[y*4+x+1] and Board.Mat[y*4+x] != 0):
-                                Value = Board.Mat[y*4+x] + 1;
-                                Board.Delete(x+1, y);
-                                Board.Move(x, y, x+1, y);
-                                Board.Raise(x+1, y, Value);
-                                if(Game.Connected):
-                                    QueueToServerMessage(Game.EventLoop, Game.ToServerQueue, 0, \
-                                                         ClientUpdateMessage(int(Board.Score), int(1 << Value)));
-                    for k in range(3):
-                        for y in range(4):
-                            for x in [2,1,0]:
-                                if(Board.Mat[y*4+x] != 0 and Board.Mat[y*4+x+1] == 0):
-                                    Board.Move(x, y, x+1, y);
+                    ScoreDelta, Penalties = Board.DoMoveRight();
                     if(Board.HasChanged()):
                         Board.Spawn(1);
+                        if(ScoreDelta != 0):
+                            Board.Scoring(Board.Score + ScoreDelta);
+                        if(Game.Connected):
+                            Data = ClientUpdateMessage(score=int(Board.Score), new_blocks=Penalties, \
+                                                       board=Board.ToList(), move_direction=Direction.RIGHT);
+                            QueueToServerMessage(Game.EventLoop, Game.ToServerQueue, 0, Data);
+                    else:
+                        assert len(Penalties) == 0 and ScoreDelta == 0;
                     Board.EndMoveBoard();
     
     for Index in range(PlayerCount):
+        dtBoard = dt;
+        if(Game.Boards[Index].BannerAnimation.Frames.size > 1): dtBoard *= 0.05;
         RenderBoard(RenderGroup, Game.Assets, \
                     BoardXs[Index], BoardYs[Index], Game.BoardDim, \
-                    Game.Boards[Index], dt);
+                    Game.Boards[Index], dtBoard);
     
     if(Game.Mode == Mode_Menu):
         Context = Game.UIContext;
@@ -884,7 +1107,10 @@ def UpdateAndRenderGame(Game: game_state, DisplayWidth: int, DisplayHeight: int)
             CreateLabel = "trying...";
         if(Layout.DoUIItem(UIID_CreateRoom, CreateLabel, "create a new room")):
             Game.CreatingRoomCount += 1;
-            QueueToServerMessage(Game.EventLoop, Game.ToServerQueue, 0, None, 1);
+            Game.WaitingInRoom = 0;
+            Game.Connected = 0;
+            Game.RoomID = "no";
+            QueueToServerMessage(Game.EventLoop, Game.ToServerQueue, 0, None, GonnaByeBye=1);
             QueueToServerMessage(Game.EventLoop, Game.ToServerQueue, 0, NewRoomRequest());
         
         JoinLabel = "Join Room";
@@ -918,7 +1144,10 @@ def UpdateAndRenderGame(Game: game_state, DisplayWidth: int, DisplayHeight: int)
                     for i in range(ROOM_ID_LENGTH):
                         RoomID = RoomID + chr(Context.JoinRoomID[i]);
                     Game.ConnectingRoomID.append(RoomID);
-                    QueueToServerMessage(Game.EventLoop, Game.ToServerQueue, 0, None, 1);
+                    Game.WaitingInRoom = 0;
+                    Game.Connected = 0;
+                    Game.RoomID = "no";
+                    QueueToServerMessage(Game.EventLoop, Game.ToServerQueue, 0, None, GonnaByeBye=1);
                     QueueToServerMessage(Game.EventLoop, Game.ToServerQueue, 0, ConnectRequest(RoomID));
                 
         
@@ -1003,31 +1232,49 @@ async def WorkerSendToServerMessage(EventLoop: asyncio.AbstractEventLoop, \
         if(Clients[Message.PlayerID] is None):
             Clients[Message.PlayerID] = await connect("ws://localhost:1357");
             EventLoop.create_task(OneClientListenEvent(ToClientQueue, Message.PlayerID, Clients[Message.PlayerID]));
-        if(Message.GonnaByeBye):
+        if(Message.GonnaByeBye == 1):
             if(Clients[Message.PlayerID] is not None):
                 await Clients[Message.PlayerID].close();
                 Clients[Message.PlayerID] = None;
+        elif(Message.GonnaByeBye == 2):
+            #a more seriously bye bye
+            for Client in Clients:
+                if(Client is not None):
+                    await Client.close();
+            break;
         else:
             await send_event(Clients[Message.PlayerID], Message.Data);
         ToServerQueue.task_done();
 
-async def MessageLoop(EventLoop: asyncio.AbstractEventLoop, \
-                      ToServerQueue: asyncio.Queue, ToClientQueue: queue, \
-                      Clients: list[WebSocketClientProtocol]):
-    #async with connect("ws://localhost:1357") as ws1, \
-    #           connect("ws://localhost:1357") as ws2:
-    EventLoop.create_task(WorkerSendToServerMessage(EventLoop, ToServerQueue, ToClientQueue, Clients));
-    Tasks = asyncio.all_tasks(EventLoop);
-    await asyncio.gather(*Tasks);
+async def Suicide(EventLoop: asyncio.AbstractEventLoop, \
+                  ToServerQueue: asyncio.Queue, ToClientQueue: queue):
+    while True:
+        try:
+            ToServerQueue.get_nowait();
+            ToServerQueue.task_done();
+        except asyncio.QueueEmpty:
+            break;
+    while True:
+        try:
+            ToClientQueue.get_nowait();
+            ToClientQueue.task_done();
+        except queue.Empty:
+            break;
+    #GonnaByeBye=2 will exit the 'to server message' processing queue, hopefully.
+    await ToServerQueue.put(to_server_message(0, None, GonnaByeBye=2));
 
 def MessageThread(EventLoop: asyncio.AbstractEventLoop, \
                   ToServerQueue: asyncio.Queue, ToClientQueue: queue, \
                   Clients: list[WebSocketClientProtocol]):
     asyncio.set_event_loop(EventLoop);
-    Task = EventLoop.create_task(MessageLoop(EventLoop, ToServerQueue, ToClientQueue, Clients));
+    Task = EventLoop.create_task(WorkerSendToServerMessage(EventLoop, ToServerQueue, ToClientQueue, Clients));
     EventLoop.run_until_complete(Task);
+    
+    ReminingTasks = asyncio.all_tasks(EventLoop);
+    while len(ReminingTasks) > 0:
+        EventLoop.run_until_complete(asyncio.gather(*ReminingTasks));
 
-async def PutToServerMessage(ToServerQueue: asyncio.Queue, ID: int, Data, GonnaByeBye:int):
+async def PutToServerMessage(ToServerQueue: asyncio.Queue, ID: int, Data, GonnaByeBye: int):
     await ToServerQueue.put(to_server_message(ID, Data, GonnaByeBye));
 
 def QueueToServerMessage(EventLoop: asyncio.AbstractEventLoop, \
@@ -1081,6 +1328,7 @@ def main():
         TimeElapsed = (FrameEnd - FrameStart) / 1000000000;
         RemainTime = TargetSecondPerFrame - TimeElapsed;
         #wait_events_timeout precision makes people sad.
+        #the precision on my computer is about 0.025s.
         while(RemainTime > 0.01):
             glfw.wait_events_timeout(RemainTime-0.01);
             FrameEnd = GetWallClock();
@@ -1092,6 +1340,8 @@ def main():
             RemainTime = TargetSecondPerFrame - TimeElapsed
         FrameTime = (FrameEnd - FrameStart);
         FrameStart = FrameEnd;
+    asyncio.run_coroutine_threadsafe(Suicide(EventLoop, ToServerQueue, ToClientQueue), EventLoop);
+    ThreadHandle.join();
 
 LOGLEVEL = os.environ.get("LOGLEVEL", "INFO").upper()
 logging.basicConfig(level=LOGLEVEL)
@@ -1121,7 +1371,7 @@ async def handle_ws2(ws: WebSocketClientProtocol):
     assert type == "connected"
     await asyncio.sleep(3)
     board = [[0,2,0,2],[4,2,8,4],[2,8,16,0],[0,0,4,2]]
-    await send_event(ws, ClientUpdateMessage(score=3535, new_blocks=[256], board=board,move_direction=Direction.LEFT))
+    await send_event(ws, ClientUpdateMessage(score=3535, new_blocks=[256], board=board, move_direction=Direction.LEFT))
     await ws.close();
     async for type, data in receive_events(ws):
         logging.info(("ws2", type, data))
