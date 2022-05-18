@@ -76,8 +76,8 @@ class MainServer:
         self, ws: WebSocketServerProtocol, data: ClientUpdateMessage
     ):
         r = self.find_matching_room(ws)
-        penalty = data.new_block // 32 if data.new_block >= 64 else None
-        resp = OpponentUpdateMessage(data.score, penalty, data.board)
+        penalty_blocks = [b // 32 for b in data.new_blocks if b >= 64]
+        resp = OpponentUpdateMessage(data.score, penalty_blocks, data.board)
         await r.try_send_opponent(ws, resp)
 
     async def handle_client_win(
