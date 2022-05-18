@@ -1229,9 +1229,6 @@ async def WorkerSendToServerMessage(EventLoop: asyncio.AbstractEventLoop, \
                                     Clients: list[WebSocketClientProtocol]):
     while True:
         Message = await ToServerQueue.get();
-        if(Clients[Message.PlayerID] is None):
-            Clients[Message.PlayerID] = await connect("ws://localhost:1357");
-            EventLoop.create_task(OneClientListenEvent(ToClientQueue, Message.PlayerID, Clients[Message.PlayerID]));
         if(Message.GonnaByeBye == 1):
             if(Clients[Message.PlayerID] is not None):
                 await Clients[Message.PlayerID].close();
@@ -1243,6 +1240,9 @@ async def WorkerSendToServerMessage(EventLoop: asyncio.AbstractEventLoop, \
                     await Client.close();
             break;
         else:
+            if(Clients[Message.PlayerID] is None):
+                Clients[Message.PlayerID] = await connect("ws://localhost:1357");
+                EventLoop.create_task(OneClientListenEvent(ToClientQueue, Message.PlayerID, Clients[Message.PlayerID]));
             await send_event(Clients[Message.PlayerID], Message.Data);
         ToServerQueue.task_done();
 
