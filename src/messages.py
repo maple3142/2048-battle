@@ -1,8 +1,14 @@
 from dataclasses import dataclass
 from dataclasses_json import dataclass_json
 from typing import Tuple, List, Any
+from enum import IntEnum
 import json
 
+class Direction(IntEnum):
+    UP = 1
+    DOWN = 2
+    LEFT = 3
+    RIGHT = 4
 
 @dataclass_json
 @dataclass
@@ -46,6 +52,7 @@ class ClientUpdateMessage:
     score: int
     new_blocks: List[int]
     board: List[List[int]]
+    move_direction: Direction
 
 
 @dataclass_json
@@ -54,6 +61,7 @@ class OpponentUpdateMessage:
     score: int
     penalty_blocks: List[int]
     board: List[List[int]]
+    move_direction: Direction
 
 
 @dataclass_json

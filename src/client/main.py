@@ -1102,11 +1102,11 @@ async def handle_ws1(ws: WebSocketClientProtocol):
     assert type == "connected"
     await asyncio.sleep(1)
     board = [[0,2,0,2],[4,2,8,4],[2,8,16,0],[0,0,4,2]]
-    await send_event(ws, ClientUpdateMessage(123, [64, 128], board))
+    await send_event(ws, ClientUpdateMessage(score=123, new_blocks=[64, 128], board=board, move_direction=Direction.UP))
     await asyncio.sleep(1)
-    await send_event(ws, ClientUpdateMessage(8763, [512], board))
+    await send_event(ws, ClientUpdateMessage(score=8763, new_blocks=[512], board=board, move_direction=Direction.UP))
     await asyncio.sleep(1)
-    await send_event(ws, ClientWinMessage(8763))
+    await send_event(ws, ClientWinMessage(score=8763))
     await ws.close();
     async for type, data in receive_events(ws):
         logging.info(("ws1", type, data))
@@ -1121,7 +1121,7 @@ async def handle_ws2(ws: WebSocketClientProtocol):
     assert type == "connected"
     await asyncio.sleep(3)
     board = [[0,2,0,2],[4,2,8,4],[2,8,16,0],[0,0,4,2]]
-    await send_event(ws, ClientUpdateMessage(3535, [256], board))
+    await send_event(ws, ClientUpdateMessage(score=3535, new_blocks=[256], board=board,move_direction=Direction.LEFT))
     await ws.close();
     async for type, data in receive_events(ws):
         logging.info(("ws2", type, data))

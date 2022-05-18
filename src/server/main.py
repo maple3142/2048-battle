@@ -77,7 +77,7 @@ class MainServer:
     ):
         r = self.find_matching_room(ws)
         penalty_blocks = [b // 32 for b in data.new_blocks if b >= 64]
-        resp = OpponentUpdateMessage(data.score, penalty_blocks, data.board)
+        resp = OpponentUpdateMessage(data.score, penalty_blocks, data.board, data.move_direction)
         await r.try_send_opponent(ws, resp)
 
     async def handle_client_win(
