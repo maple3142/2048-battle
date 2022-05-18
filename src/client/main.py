@@ -1140,5 +1140,5 @@ async def test_message():
         await asyncio.gather(handle_ws1(ws1), handle_ws2(ws2))
 
 if __name__ == "__main__":
-    # main();
-    asyncio.run(test_message())
+    main();
+    # asyncio.run(test_message())

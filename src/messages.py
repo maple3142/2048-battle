@@ -47,7 +47,7 @@ class DisconnectedMessage:
 
 
 @dataclass_json
-@dataclass
+@dataclass(kw_only=True)
 class ClientUpdateMessage:
     score: int
     new_blocks: List[int]
@@ -56,7 +56,7 @@ class ClientUpdateMessage:
 
 
 @dataclass_json
-@dataclass
+@dataclass(kw_only=True)
 class OpponentUpdateMessage:
     score: int
     penalty_blocks: List[int]
