@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 from dataclasses_json import dataclass_json
-from typing import Optional, Tuple, Any
+from typing import Optional, Tuple, List, Any
 import json
 
 
@@ -45,13 +45,15 @@ class DisconnectedMessage:
 class ClientUpdateMessage:
     score: int
     new_block: int
+    board: List[List[int]]
 
 
 @dataclass_json
 @dataclass
 class OpponentUpdateMessage:
     score: int
-    penalty_block: Optional[int] = None
+    penalty_block: Optional[int]
+    board: List[List[int]]
 
 
 @dataclass_json
