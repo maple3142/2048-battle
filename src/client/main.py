@@ -6,6 +6,7 @@ import logging
 import os
 from typing import Tuple
 
+import argparse
 import numpy as np
 import glfw
 import time
@@ -201,6 +202,10 @@ class animation:
                     Frame.LoopCount -= 1;
                     if(Frame.LoopCount == 0):
                         self.Frames = np.delete(self.Frames, 0);
+                elif(Frame.LoopCount == 0):
+                    Frame = self.Frames[0];
+                    self.Frames = np.delete(self.Frames, 0);
+                    self.AddFrame(Frame.X0, Frame.Y0, Frame.R0, Frame.X1, Frame.Y1, Frame.R1, Frame.t1, Frame.Value, Frame.LoopCount);
         return X, Y, R, Value;
 
 class ui_context:
@@ -253,13 +258,22 @@ class ui_layout:
         AtY = self.CursorY;
         RenderString(Context.RenderGroup, Context.Assets, AtX+0.01, AtY-0.01, self.TooltipLineHeight, self.Tooltip, v4(0, 0, 0, 1));
         RenderString(Context.RenderGroup, Context.Assets, AtX, AtY, self.TooltipLineHeight, self.Tooltip, Color_Tooltip);
-        self.CursorY -= self.TooltipLineHeight*1.5;
+        self.CursorY -= self.TooltipLineHeight*1.2;
+        
+        Hint = "(press space to select)";
+        MinX, MinY, MaxX, MaxY = GetStringRect(Context.RenderGroup, Context.Assets, self.TooltipLineHeight, Hint);
+        AtX = self.CursorX + MinX - (MaxX - MinX)/2;
+        AtY = self.CursorY;
+        RenderString(Context.RenderGroup, Context.Assets, AtX+0.01, AtY-0.01, self.TooltipLineHeight, Hint, v4(0, 0, 0, 1));
+        RenderString(Context.RenderGroup, Context.Assets, AtX, AtY, self.TooltipLineHeight, Hint, Color_Tooltip);
+        self.CursorY -= self.TooltipLineHeight*1.2;
         
 
 class game_state:
     def __init__(self, BoardCountX: int, BoardCountY: int, BoardDim: int, \
                  EventLoop: asyncio.AbstractEventLoop, \
                  ToServerQueue: asyncio.Queue, ToClientQueue: queue):
+        self.FirstHint = 1;
         self.Assets = assets();
         self.UIContext = ui_context();
         self.BoardCountX = BoardCountX;
@@ -523,6 +537,8 @@ Color_Board         = v4(0.733, 0.678, 0.627, 1.0);
 Color_MenuItem      = v4(0.976, 0.965, 0.949, 1.0);
 Color_HotMenuItem   = v4(0.965, 0.486, 0.376, 1.0);
 Color_Tooltip       = v4(0.929, 0.878, 0.784, 1.0);
+Color_Hint          = v4(0.467, 0.431, 0.396, 1.0);
+Color_Hint2         = v4(1.000, 1.000, 1.000, 1.0);
 
 TextColors = np.empty(12, dtype=object);
 TileColors = np.empty(12, dtype=object);
@@ -694,7 +710,8 @@ def GetStringRect(Group: render_group, Assets: assets, LineHeight: float, String
 
 def RenderBoard(Group: render_group, Assets: assets, \
                 BoardX: float, BoardY: float, BoardDim: float, \
-                Board: board, dt: float):
+                Board: board, dt: float, 
+                MaskColor: v4, Hints: list[str], HintColor: v4):
     global TileColors;
     global TextColors;
     HalfDim = BoardDim * 0.5;
@@ -740,11 +757,24 @@ def RenderBoard(Group: render_group, Assets: assets, \
     ScoreLineHeight = BoardDim * 0.075 * AtR;
     ScoreText = "Score: " + str(Score);
     MinX, MinY, MaxX, MaxY = GetStringRect(Group, Assets, ScoreLineHeight, ScoreText);
-    ScoreWidth = MaxX - MinX;
     RenderString(Group, Assets, 
-                 BoardX+HalfDim - ScoreWidth, BoardY+HalfDim + ScoreLineHeight*0.4, \
+                 BoardX+HalfDim - (MaxX-MinX), BoardY+HalfDim + ScoreLineHeight*0.4, \
                  ScoreLineHeight, \
                  ScoreText, v4(0, 0, 0, 1));
+    
+    RenderQuad(Group, BoardX-HalfDim, BoardY-HalfDim, BoardDim, BoardDim, MaskColor);
+    HintLineHeight = BoardDim * 0.06;
+    for Index in range(len(Hints)):
+        Hint = Hints[Index];
+        MinX, MinY, MaxX, MaxY = GetStringRect(Group, Assets, HintLineHeight, Hint);
+        RenderString(Group, Assets, 
+                     BoardX - (MaxX-MinX)/2 + HintLineHeight*0.02, BoardY + (HintLineHeight*1.2)*(len(Hints)/2-Index-0.5) - (MaxY*0.5) - HintLineHeight*0.02, \
+                     HintLineHeight, \
+                     Hint, v4(0, 0, 0, 1.0));
+        RenderString(Group, Assets, 
+                     BoardX - (MaxX-MinX)/2, BoardY + (HintLineHeight*1.2)*(len(Hints)/2-Index-0.5) - (MaxY*0.5), \
+                     HintLineHeight, \
+                     Hint, HintColor);
     
     Animation = Board.BannerAnimation;
     AtX, AtY, AtR, BannerType = Animation.Lerp(dt);
@@ -927,10 +957,11 @@ def UpdateAndRenderGame(Game: game_state, DisplayWidth: int, DisplayHeight: int)
                 Boards[Index] = Game.Boards[Index];
             else:
                 Boards[Index] = board();
-                Boards[Index].BeginMoveBoard(1, 1);
-                Boards[Index].Spawn(1);
-                Boards[Index].EndMoveBoard();
         Game.Boards = Boards;
+        Boards[0].BeginMoveBoard(1, 1);
+        Boards[0].Spawn(1);
+        Boards[0].EndMoveBoard();
+    
     
     if(Game.Connected):
         Banner0 = Banner_None;
@@ -1020,6 +1051,7 @@ def UpdateAndRenderGame(Game: game_state, DisplayWidth: int, DisplayHeight: int)
             
             if(Board.BannerAnimation.Frames.size <= 1):
                 if(Input.IsPressed(Key_Up)):
+                    Game.FirstHint = 0;
                     Board.BeginMoveBoard(1, 1);
                     ScoreDelta, Penalties = Board.DoMoveUp();
                     if(Board.HasChanged()):
@@ -1034,6 +1066,7 @@ def UpdateAndRenderGame(Game: game_state, DisplayWidth: int, DisplayHeight: int)
                         assert len(Penalties) == 0 and ScoreDelta == 0;
                     Board.EndMoveBoard();
                 if(Input.IsPressed(Key_Down)):
+                    Game.FirstHint = 0;
                     Board.BeginMoveBoard(1, -1);
                     ScoreDelta, Penalties = Board.DoMoveDown();
                     if(Board.HasChanged()):
@@ -1048,6 +1081,7 @@ def UpdateAndRenderGame(Game: game_state, DisplayWidth: int, DisplayHeight: int)
                         assert len(Penalties) == 0 and ScoreDelta == 0;
                     Board.EndMoveBoard();
                 if(Input.IsPressed(Key_Left)):
+                    Game.FirstHint = 0;
                     Board.BeginMoveBoard(-1, 1);
                     ScoreDelta, Penalties = Board.DoMoveLeft();
                     if(Board.HasChanged()):
@@ -1062,6 +1096,7 @@ def UpdateAndRenderGame(Game: game_state, DisplayWidth: int, DisplayHeight: int)
                         assert len(Penalties) == 0 and ScoreDelta == 0;
                     Board.EndMoveBoard();
                 if(Input.IsPressed(Key_Right)):
+                    Game.FirstHint = 0;
                     Board.BeginMoveBoard(1, 1);
                     ScoreDelta, Penalties = Board.DoMoveRight();
                     if(Board.HasChanged()):
@@ -1078,10 +1113,24 @@ def UpdateAndRenderGame(Game: game_state, DisplayWidth: int, DisplayHeight: int)
     
     for Index in range(PlayerCount):
         dtBoard = dt;
-        if(Game.Boards[Index].BannerAnimation.Frames.size > 1): dtBoard *= 0.05;
+        Hints = [];
+        HintColor = v4(0, 0, 0, 0);
+        MaskColor = v4(0, 0, 0, 0);
+        if(Game.Boards[Index].BannerAnimation.Frames.size > 1):
+            dtBoard *= 0.05;
+        else:
+            if(not Game.Connected and Index != 0):
+                Hints = ["Press ESC to open menu", "and play with others."];
+                HintColor = Color_Hint2;
+                MaskColor = v4(0, 0, 0, 0.4);
+                Game.Boards[Index] = board();
+        if(Index == 0 and Game.FirstHint):
+            Hints = ["Press arrow key to move", "the numbers.", "Add them up to 2048!"];
+            HintColor = Color_Hint;
         RenderBoard(RenderGroup, Game.Assets, \
                     BoardXs[Index], BoardYs[Index], Game.BoardDim, \
-                    Game.Boards[Index], dtBoard);
+                    Game.Boards[Index], dtBoard, \
+                    MaskColor, Hints, HintColor);
     
     if(Game.Mode == Mode_Menu):
         Context = Game.UIContext;
@@ -1184,6 +1233,16 @@ def KeyHandler(Window, Key: int, ScanCode: int, Action: int, Mods: int):
     elif(Key == glfw.KEY_KP_7):         Input.Buttons[Key_7         ] = IsDown;
     elif(Key == glfw.KEY_KP_8):         Input.Buttons[Key_8         ] = IsDown;
     elif(Key == glfw.KEY_KP_9):         Input.Buttons[Key_9         ] = IsDown;
+    elif(Key == glfw.KEY_0):            Input.Buttons[Key_0         ] = IsDown;
+    elif(Key == glfw.KEY_1):            Input.Buttons[Key_1         ] = IsDown;
+    elif(Key == glfw.KEY_2):            Input.Buttons[Key_2         ] = IsDown;
+    elif(Key == glfw.KEY_3):            Input.Buttons[Key_3         ] = IsDown;
+    elif(Key == glfw.KEY_4):            Input.Buttons[Key_4         ] = IsDown;
+    elif(Key == glfw.KEY_5):            Input.Buttons[Key_5         ] = IsDown;
+    elif(Key == glfw.KEY_6):            Input.Buttons[Key_6         ] = IsDown;
+    elif(Key == glfw.KEY_7):            Input.Buttons[Key_7         ] = IsDown;
+    elif(Key == glfw.KEY_8):            Input.Buttons[Key_8         ] = IsDown;
+    elif(Key == glfw.KEY_9):            Input.Buttons[Key_9         ] = IsDown;
     
     if(Key == glfw.KEY_KP_2):           Input.Buttons[Key_Dev2      ] = IsDown;
     elif(Key == glfw.KEY_KP_4):         Input.Buttons[Key_Dev4      ] = IsDown;
@@ -1224,7 +1283,7 @@ async def OneClientListenEvent(Queue: queue, ID: int, Client: WebSocketClientPro
         Message = to_client_message(ID, Type, Data);
         Queue.put(Message);
 
-async def WorkerSendToServerMessage(EventLoop: asyncio.AbstractEventLoop, \
+async def WorkerSendToServerMessage(EventLoop: asyncio.AbstractEventLoop, ServerURI: str, \
                                     ToServerQueue: asyncio.Queue, ToClientQueue: queue, \
                                     Clients: list[WebSocketClientProtocol]):
     while True:
@@ -1241,7 +1300,7 @@ async def WorkerSendToServerMessage(EventLoop: asyncio.AbstractEventLoop, \
             break;
         else:
             if(Clients[Message.PlayerID] is None):
-                Clients[Message.PlayerID] = await connect("ws://localhost:1357");
+                Clients[Message.PlayerID] = await connect(ServerURI);
                 EventLoop.create_task(OneClientListenEvent(ToClientQueue, Message.PlayerID, Clients[Message.PlayerID]));
             await send_event(Clients[Message.PlayerID], Message.Data);
         ToServerQueue.task_done();
@@ -1263,11 +1322,11 @@ async def Suicide(EventLoop: asyncio.AbstractEventLoop, \
     #GonnaByeBye=2 will exit the 'to server message' processing queue, hopefully.
     await ToServerQueue.put(to_server_message(0, None, GonnaByeBye=2));
 
-def MessageThread(EventLoop: asyncio.AbstractEventLoop, \
+def MessageThread(EventLoop: asyncio.AbstractEventLoop, ServerURI: str, \
                   ToServerQueue: asyncio.Queue, ToClientQueue: queue, \
                   Clients: list[WebSocketClientProtocol]):
     asyncio.set_event_loop(EventLoop);
-    Task = EventLoop.create_task(WorkerSendToServerMessage(EventLoop, ToServerQueue, ToClientQueue, Clients));
+    Task = EventLoop.create_task(WorkerSendToServerMessage(EventLoop, ServerURI, ToServerQueue, ToClientQueue, Clients));
     EventLoop.run_until_complete(Task);
     
     ReminingTasks = asyncio.all_tasks(EventLoop);
@@ -1281,12 +1340,12 @@ def QueueToServerMessage(EventLoop: asyncio.AbstractEventLoop, \
                          ToServerQueue: asyncio.Queue, ID: int, Data, GonnaByeBye: int = 0):
     asyncio.run_coroutine_threadsafe(PutToServerMessage(ToServerQueue, ID, Data, GonnaByeBye), EventLoop);
 
-def main():
+def main(ServerURI: str):
     EventLoop = asyncio.new_event_loop();
     ToServerQueue = asyncio.Queue();
     ToClientQueue = queue.Queue();
     Clients = [None, None];
-    ThreadHandle = threading.Thread(target=MessageThread, args=(EventLoop, ToServerQueue, ToClientQueue, Clients), daemon=True);
+    ThreadHandle = threading.Thread(target=MessageThread, args=(EventLoop, ServerURI, ToServerQueue, ToClientQueue, Clients), daemon=True);
     ThreadHandle.start();
     
     glfw.init();
@@ -1390,5 +1449,10 @@ async def test_message():
         await asyncio.gather(handle_ws1(ws1), handle_ws2(ws2))
 
 if __name__ == "__main__":
-    main();
+    parser = argparse.ArgumentParser(description="Game client");
+    parser.add_argument("--port", type=int, default=1357, help="Server port");
+    parser.add_argument("--host", type=str, default="localhost", help="Server host");
+    args = parser.parse_args();
+    ServerURI = "ws://" + args.host + ":" + str(args.port);
+    main(ServerURI);
     # asyncio.run(test_message())
