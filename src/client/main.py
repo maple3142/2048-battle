@@ -61,11 +61,12 @@ UIID_CreateRoom = 2;
 UIID_JoinRoom   = 3;
 UIID_Exit       = 4;
 
-Banner_None     = 0;
-Banner_Win      = 1;
-Banner_Lose     = 2;
-Banner_Draw     = 3;
-Banner_NoMove   = 4;
+Banner_None      = 0;
+Banner_Win       = 1;
+Banner_Lose      = 2;
+Banner_Draw      = 3;
+Banner_NoMove    = 4;
+Banner_FullBoard = 5;
 
 TargetFPS = 60.0;
 TargetSecondPerFrame = 1.0 / TargetFPS;
@@ -307,6 +308,7 @@ class board:
         self.BannerAnimation = animation();
         self.ScoreAnimation.AddFrame(0, 0, 1, 0, 0, 1, 1, self.Score, 0);
         self.BannerAnimation.AddFrame(0, 0, 1, 0, 0, 1, 1, 0, 0);
+        self.WaitForFullBoardLose = 0;
         for i in range(4*4):
                 self.Pack[i] = animation();
         for y in range(4):
@@ -323,6 +325,12 @@ class board:
             [int(self.Mat[12]), int(self.Mat[13]), int(self.Mat[14]), int(self.Mat[15])], \
         ];
         return BoardList;
+    
+    def IsFull(self) -> int:
+        for i in range(4*4):
+            if(self.Mat[i] == 0):
+                return 0;
+        return 1;
     
     def BeginMoveBoard(self, VX: int, VY: int):
         self.VX = VX;
@@ -798,6 +806,10 @@ def RenderBoard(Group: render_group, Assets: assets, \
             Banner = "No Move";
             BannerColor = v4(1.000, 0.000, 0.212, 1);
             ShadowColor = v4(0.500, 0.000, 0.106, 1);
+        elif(BannerType == Banner_FullBoard):
+            Banner = "Full Board";
+            BannerColor = v4(1.000, 0.000, 0.212, 1);
+            ShadowColor = v4(0.500, 0.000, 0.106, 1);
         BannerLineHeight = BoardDim * 0.25 * AtR;
         MinX, MinY, MaxX, MaxY = GetStringRect(Group, Assets, BannerLineHeight, Banner);
         RenderString(Group, Assets, 
@@ -829,6 +841,7 @@ def UpdateAndRenderGame(Game: game_state, DisplayWidth: int, DisplayHeight: int)
                     Game.ConnectingRoomID.append(Game.RoomID);
             elif(Message.Type == "connected"):
                 if(len(Game.ConnectingRoomID) > 0):
+                    Game.Mode = Mode_Game;
                     Game.RoomID = Game.ConnectingRoomID.pop();
                     Game.WaitingInRoom = 0;
                     Game.Connected = 1;
@@ -850,7 +863,11 @@ def UpdateAndRenderGame(Game: game_state, DisplayWidth: int, DisplayHeight: int)
                 if(Message.Data.score != Game.Boards[1].Score):
                     Game.Boards[1].Scoring(Message.Data.score);
                 Game.Boards[0].BeginMoveBoard(1, 1);
+                
+                FullBoardLose = 0;
                 for Penalty in Message.Data.penalty_blocks:
+                    if(Game.Boards[0].IsFull()):
+                        FullBoardLose = 1;
                     Shift = 0;
                     for i in range(32): 
                         if(Penalty <= 1):
@@ -888,11 +905,15 @@ def UpdateAndRenderGame(Game: game_state, DisplayWidth: int, DisplayHeight: int)
                             else:
                                 Game.Boards[1].Delete(x, y);
                 Game.Boards[1].EndMoveBoard();
+                if(FullBoardLose):
+                    Game.Boards[0].WaitForFullBoardLose = 1;
+                    SurrenderData = ClientWinMessage(-2);
+                    #wait for opponent declare win, can't leave yet.
+                    QueueToServerMessage(Game.EventLoop, Game.ToServerQueue, 0, SurrenderData);
             elif(Message.Type == "opponent_win"):
                 Game.WaitingInRoom = 0;
                 Game.Connected = 0;
                 Game.RoomID = "no";
-                QueueToServerMessage(Game.EventLoop, Game.ToServerQueue, 0, None, GonnaByeBye=1);
                 if(Message.Data.score == -1):
                     Game.Boards[0].BannerAnimation = animation();
                     Game.Boards[0].BannerAnimation.AddFrame(0, 0, 0.6, 0, 0, 1.1, 0.075, Banner_Draw);
@@ -904,17 +925,43 @@ def UpdateAndRenderGame(Game: game_state, DisplayWidth: int, DisplayHeight: int)
                     Game.Boards[1].BannerAnimation.AddFrame(0, 0, 1.1, 0, 0, 1.0, 0.075, Banner_Draw);
                     Game.Boards[1].BannerAnimation.AddFrame(0, 0, 1.0, 0, 0, 1.0, 0.250, Banner_Draw);
                     Game.Boards[1].BannerAnimation.AddFrame(0, 0, 1.0, 0, 0, 1.0, 1.000, Banner_None, 0);
-                else:
+                elif(Message.Data.score == -2): #opponent surrender
+                    QueueToServerMessage(Game.EventLoop, Game.ToServerQueue, 0, ClientWinMessage(Game.Boards[0].Score));
                     Game.Boards[0].BannerAnimation = animation();
-                    Game.Boards[0].BannerAnimation.AddFrame(0, 0, 0.6, 0, 0, 1.1, 0.075, Banner_Lose);
-                    Game.Boards[0].BannerAnimation.AddFrame(0, 0, 1.1, 0, 0, 1.0, 0.075, Banner_Lose);
-                    Game.Boards[0].BannerAnimation.AddFrame(0, 0, 1.0, 0, 0, 1.0, 0.250, Banner_Lose);
+                    Game.Boards[0].BannerAnimation.AddFrame(0, 0, 0.6, 0, 0, 1.1, 0.075, Banner_Win);
+                    Game.Boards[0].BannerAnimation.AddFrame(0, 0, 1.1, 0, 0, 1.0, 0.075, Banner_Win);
+                    Game.Boards[0].BannerAnimation.AddFrame(0, 0, 1.0, 0, 0, 1.0, 0.250, Banner_Win);
                     Game.Boards[0].BannerAnimation.AddFrame(0, 0, 1.0, 0, 0, 1.0, 1.000, Banner_None, 0);
+                    Game.Boards[1].BannerAnimation = animation();
+                    Game.Boards[1].BannerAnimation.AddFrame(0, 0, 0.6, 0, 0, 1.1, 0.075, Banner_FullBoard);
+                    Game.Boards[1].BannerAnimation.AddFrame(0, 0, 1.1, 0, 0, 1.0, 0.075, Banner_FullBoard);
+                    Game.Boards[1].BannerAnimation.AddFrame(0, 0, 1.0, 0, 0, 1.0, 0.250, Banner_FullBoard);
+                    Game.Boards[1].BannerAnimation.AddFrame(0, 0, 1.0, 0, 0, 1.0, 1.000, Banner_None, 0);
+                else:
+                    if(Game.Boards[0].WaitForFullBoardLose):
+                        Game.Boards[0].BannerAnimation = animation();
+                        Game.Boards[0].BannerAnimation.AddFrame(0, 0, 0.6, 0, 0, 1.1, 0.075, Banner_FullBoard);
+                        Game.Boards[0].BannerAnimation.AddFrame(0, 0, 1.1, 0, 0, 1.0, 0.075, Banner_FullBoard);
+                        Game.Boards[0].BannerAnimation.AddFrame(0, 0, 1.0, 0, 0, 1.0, 0.250, Banner_FullBoard);
+                        Game.Boards[0].BannerAnimation.AddFrame(0, 0, 1.0, 0, 0, 1.0, 1.000, Banner_None, 0);
+                    elif(Game.Boards[0].HasMove()):
+                        Game.Boards[0].BannerAnimation = animation();
+                        Game.Boards[0].BannerAnimation.AddFrame(0, 0, 0.6, 0, 0, 1.1, 0.075, Banner_Lose);
+                        Game.Boards[0].BannerAnimation.AddFrame(0, 0, 1.1, 0, 0, 1.0, 0.075, Banner_Lose);
+                        Game.Boards[0].BannerAnimation.AddFrame(0, 0, 1.0, 0, 0, 1.0, 0.250, Banner_Lose);
+                        Game.Boards[0].BannerAnimation.AddFrame(0, 0, 1.0, 0, 0, 1.0, 1.000, Banner_None, 0);
+                    else:
+                        Game.Boards[0].BannerAnimation = animation();
+                        Game.Boards[0].BannerAnimation.AddFrame(0, 0, 0.6, 0, 0, 1.1, 0.075, Banner_NoMove);
+                        Game.Boards[0].BannerAnimation.AddFrame(0, 0, 1.1, 0, 0, 1.0, 0.075, Banner_NoMove);
+                        Game.Boards[0].BannerAnimation.AddFrame(0, 0, 1.0, 0, 0, 1.0, 0.250, Banner_NoMove);
+                        Game.Boards[0].BannerAnimation.AddFrame(0, 0, 1.0, 0, 0, 1.0, 1.000, Banner_None, 0);
                     Game.Boards[1].BannerAnimation = animation();
                     Game.Boards[1].BannerAnimation.AddFrame(0, 0, 0.6, 0, 0, 1.1, 0.075, Banner_Win);
                     Game.Boards[1].BannerAnimation.AddFrame(0, 0, 1.1, 0, 0, 1.0, 0.075, Banner_Win);
                     Game.Boards[1].BannerAnimation.AddFrame(0, 0, 1.0, 0, 0, 1.0, 0.250, Banner_Win);
                     Game.Boards[1].BannerAnimation.AddFrame(0, 0, 1.0, 0, 0, 1.0, 1.000, Banner_None, 0);
+                QueueToServerMessage(Game.EventLoop, Game.ToServerQueue, 0, None, GonnaByeBye=1);
         except queue.Empty:
             break;
     
@@ -976,7 +1023,7 @@ def UpdateAndRenderGame(Game: game_state, DisplayWidth: int, DisplayHeight: int)
             if(not PlayerCanMove and not OpponentCanMove):
                 if(Game.Boards[0].Score > Game.Boards[1].Score):
                     Banner0 = Banner_Win;
-                    Banner1 = Banner_Lose;
+                    Banner1 = Banner_NoMove;
                 elif(Game.Boards[0].Score < Game.Boards[1].Score):
                     #NOTE: wait for opponent declare winning
                     pass;
@@ -988,13 +1035,10 @@ def UpdateAndRenderGame(Game: game_state, DisplayWidth: int, DisplayHeight: int)
                     #NOTE: wait for opponent declare winning
                     pass;
                 else:
-                    Banner0 = Banner_NoMove;
+                    Banner0 = Banner_None;
             elif(not OpponentCanMove):
-                if(Game.Boards[0].Score > Game.Boards[1].Score):
-                    Banner0 = Banner_Win;
-                    Banner1 = Banner_Lose;
-                else:
-                    Banner1 = Banner_NoMove;
+                Banner0 = Banner_Win;
+                Banner1 = Banner_NoMove;
         
         if(Banner0 == Banner_Win):
             Game.WaitingInRoom = 0;
@@ -1009,31 +1053,13 @@ def UpdateAndRenderGame(Game: game_state, DisplayWidth: int, DisplayHeight: int)
             QueueToServerMessage(Game.EventLoop, Game.ToServerQueue, 0, ClientWinMessage(int(-1)));
             QueueToServerMessage(Game.EventLoop, Game.ToServerQueue, 0, None, GonnaByeBye=1);
         
-        if(Banner0 == Banner_NoMove):
-            if(Game.Boards[0].BannerAnimation.Frames.size <= 1):
-                #stub a frame to prevent the animation replaying again and again.
-                Game.Boards[0].BannerAnimation = animation();
-                Game.Boards[0].BannerAnimation.AddFrame(0, 0, 0.6, 0, 0, 1.1, 0.075, Banner_NoMove);
-                Game.Boards[0].BannerAnimation.AddFrame(0, 0, 1.1, 0, 0, 1.0, 0.075, Banner_NoMove);
-                Game.Boards[0].BannerAnimation.AddFrame(0, 0, 1.0, 0, 0, 1.0, 0.250, Banner_NoMove);
-                Game.Boards[0].BannerAnimation.AddFrame(0, 0, 1.0, 0, 0, 1.0, 1.000, Banner_NoMove, 0);
-                Game.Boards[0].BannerAnimation.AddFrame(0, 0, 1.0, 0, 0, 1.0, 1.000, Banner_NoMove, 0);
-        elif(Banner0 != Banner_None):
+        if(Banner0 != Banner_None):
             Game.Boards[0].BannerAnimation = animation();
             Game.Boards[0].BannerAnimation.AddFrame(0, 0, 0.6, 0, 0, 1.1, 0.075, Banner0);
             Game.Boards[0].BannerAnimation.AddFrame(0, 0, 1.1, 0, 0, 1.0, 0.075, Banner0);
             Game.Boards[0].BannerAnimation.AddFrame(0, 0, 1.0, 0, 0, 1.0, 0.250, Banner0);
             Game.Boards[0].BannerAnimation.AddFrame(0, 0, 1.0, 0, 0, 1.0, 1.000, Banner_None, 0);
-        if(Banner1 == Banner_NoMove):
-            if(Game.Boards[1].BannerAnimation.Frames.size <= 1):
-                #stub a frame to prevent the animation replaying again and again.
-                Game.Boards[1].BannerAnimation = animation();
-                Game.Boards[1].BannerAnimation.AddFrame(0, 0, 0.6, 0, 0, 1.1, 0.075, Banner_NoMove);
-                Game.Boards[1].BannerAnimation.AddFrame(0, 0, 1.1, 0, 0, 1.0, 0.075, Banner_NoMove);
-                Game.Boards[1].BannerAnimation.AddFrame(0, 0, 1.0, 0, 0, 1.0, 0.250, Banner_NoMove);
-                Game.Boards[1].BannerAnimation.AddFrame(0, 0, 1.0, 0, 0, 1.0, 1.000, Banner_NoMove, 0);
-                Game.Boards[1].BannerAnimation.AddFrame(0, 0, 1.0, 0, 0, 1.0, 1.000, Banner_NoMove, 0);
-        elif(Banner1 != Banner_None):
+        if(Banner1 != Banner_None):
             Game.Boards[1].BannerAnimation = animation();
             Game.Boards[1].BannerAnimation.AddFrame(0, 0, 0.6, 0, 0, 1.1, 0.075, Banner1);
             Game.Boards[1].BannerAnimation.AddFrame(0, 0, 1.1, 0, 0, 1.0, 0.075, Banner1);
