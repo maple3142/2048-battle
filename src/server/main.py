@@ -76,7 +76,7 @@ class MainServer:
         self, ws: WebSocketServerProtocol, data: ClientUpdateMessage
     ):
         r = self.find_matching_room(ws)
-        penalty_blocks = [b // 32 for b in data.new_blocks if b >= 64]
+        penalty_blocks = [b // 16 for b in data.new_blocks if b >= 32]
         resp = OpponentUpdateMessage(
             score=data.score,
             penalty_blocks=penalty_blocks,
