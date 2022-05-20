@@ -1465,8 +1465,8 @@ async def handle_ws2(ws: WebSocketClientProtocol):
             break
 
 async def test_message():
-    async with connect("ws://localhost:1357") as ws1, \
-               connect("ws://localhost:1357") as ws2:
+    async with connect("ws://localhost:2048") as ws1, \
+               connect("ws://localhost:2048") as ws2:
         await send_event(ws1, NewRoomRequest())
         type, data = await anext(receive_events(ws1))
         logging.info((type, data))
@@ -1476,7 +1476,7 @@ async def test_message():
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Game client");
-    parser.add_argument("--port", type=int, default=1357, help="Server port");
+    parser.add_argument("--port", type=int, default=2048, help="Server port");
     parser.add_argument("--host", type=str, default="localhost", help="Server host");
     args = parser.parse_args();
     ServerURI = "ws://" + args.host + ":" + str(args.port);

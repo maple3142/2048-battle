@@ -113,7 +113,7 @@ async def start(host, port):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Game server")
-    parser.add_argument("--port", type=int, default=1357, help="Server port")
+    parser.add_argument("--port", type=int, default=2048, help="Server port")
     parser.add_argument("--host", type=str, default="localhost", help="Server host")
     args = parser.parse_args()
     asyncio.run(start(args.host, args.port))
