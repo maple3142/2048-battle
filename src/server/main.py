@@ -1,7 +1,7 @@
 import asyncio
 import argparse
 from websockets.server import serve, WebSocketServerProtocol
-from websockets.exceptions import ConnectionClosed
+from websockets.exceptions import ConnectionClosed, ConnectionClosedError
 from shared_utils import receive_events, send_event, rand_num_str
 from messages import *
 from typing import Dict, Set
@@ -93,11 +93,14 @@ class MainServer:
             await r.try_send_opponent(ws, OpponentWinMessage(data.score))
 
     async def handle(self, ws: WebSocketServerProtocol):
-        async for type, data in receive_events(ws):
-            logging.info(f"received {type} message {data}")
-            handler = getattr(self, f"handle_{type}", None)
-            if handler is not None:
-                await handler(ws, data)
+        try:
+            async for type, data in receive_events(ws):
+                logging.info(f"received {type} message {data}")
+                handler = getattr(self, f"handle_{type}", None)
+                if handler is not None:
+                    await handler(ws, data)
+        except ConnectionClosedError:
+            pass
         logging.info(f"{ws} disconnected")
         if (r := self.find_matching_room(ws)) is not None:
             await r.try_send_all(DisconnectedMessage())
